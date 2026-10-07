@@ -1,0 +1,82 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+;
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
+
+config_version=5
+
+[application]
+
+config/name="Disc Golf Empire"
+run/main_scene="uid://bwmppo3ou1w7n"
+config/features=PackedStringArray("4.6", "Mobile")
+config/icon="res://icon.svg"
+
+[display]
+
+window/size/viewport_width=1920
+window/size/viewport_height=1080
+window/size/mode=3
+window/size/resizable=false
+
+[rendering]
+
+renderer/rendering_method="mobile"
+
+[xogot]
+
+project/editorState=[{
+"column": 0,
+"line": 437,
+"path": "res://course_manager.gd",
+"type": "file"
+}, {
+"column": 0,
+"line": 0,
+"path": "res://property_manager.gd",
+"type": "file"
+}, {
+"column": 0,
+"line": 2729,
+"path": "res://course_renderer.gd",
+"type": "file"
+}, {
+"column": 0,
+"line": 609,
+"path": "res://camera_controller.gd",
+"type": "file"
+}, {
+"column": 0,
+"line": 1390,
+"path": "res://course_builder.gd",
+"type": "file"
+}, {
+"column": 0,
+"line": 0,
+"path": "res://economy_manager.gd",
+"type": "file"
+}, {
+"column": 0,
+"line": 2549,
+"path": "res://course_ui.gd",
+"type": "file"
+}, {
+"column": 0,
+"line": 2547,
+"path": "res://job_manager.gd",
+"type": "file"
+}, {
+"column": 0,
+"current": true,
+"line": 226,
+"path": "res://main.gd",
+"type": "file"
+}]
+project/shaderEditorState=[]
+project/breakpoints={
+"res://main.gd": PackedInt32Array(189)
+}
+project/disabled_breakpoints={}

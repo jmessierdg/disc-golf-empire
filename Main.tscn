@@ -1,0 +1,7 @@
+[gd_scene format=3 uid="uid://bwmppo3ou1w7n"]
+
+[ext_resource type="Script" uid="uid://cwtwbwxwj6p1q" path="res://main.gd" id="1_glv2v"]
+
+[node name="Node2D" type="Node2D" unique_id=2060918023]
+skew = 0.00058721355
+script = ExtResource("1_glv2v")
