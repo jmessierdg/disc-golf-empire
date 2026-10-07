@@ -73,6 +73,7 @@ const NAV_DIRECTIONS: Array[Vector2i] = [
 
 var property_manager
 var course_renderer
+var economy_manager
 
 
 # ==================================================
@@ -92,12 +93,18 @@ var next_worker_id := 1
 
 
 # ==================================================
+# EQUIPMENT ASSIGNMENTS
+# ==================================================
+
+# Equipment ownership lives in EconomyManager. JobManager only tracks
+# which owned units are currently reserved by active workers.
+var reserved_equipment: Dictionary = {}
+
+
+# ==================================================
 # NAVIGATION CACHE
 # ==================================================
 
-# Water and trees are expensive to rescan every time a worker needs A*.
-# Mowing/brush work does not change either obstacle type, so keep a shared
-# blocked-cell map and rebuild it only when the tree count changes.
 var navigation_blocked_cache: Dictionary = {}
 var navigation_cache_tree_count := -1
 var navigation_cache_ready := false
@@ -109,15 +116,18 @@ var navigation_cache_ready := false
 
 func setup(
 	property_ref,
-	renderer_ref
+	renderer_ref,
+	economy_ref = null
 ) -> void:
 
 	property_manager = property_ref
 	course_renderer = renderer_ref
+	economy_manager = economy_ref
 
 	workers.clear()
 	next_worker_id = 1
 
+	reserved_equipment.clear()
 	invalidate_navigation_cache()
 
 	for i in range(
@@ -138,6 +148,7 @@ func create_worker() -> int:
 		"id": next_worker_id,
 		"state": WORKER_IDLE,
 		"job_id": -1,
+		"equipment_type": "",
 
 		"position": Vector2.ZERO,
 		"direction": Vector2.RIGHT,
@@ -267,9 +278,20 @@ func find_next_queued_job() -> Dictionary:
 		if job.get(
 			"state",
 			STATE_QUEUED
-		) == STATE_QUEUED:
+		) != STATE_QUEUED:
+			continue
 
-			return job
+		if not is_required_equipment_available(
+			String(
+				job.get(
+					"type",
+					""
+				)
+			)
+		):
+			continue
+
+		return job
 
 	return {}
 
@@ -303,6 +325,24 @@ func assign_job_to_worker(
 		)
 	)
 
+	var job_type: String = String(
+		job.get(
+			"type",
+			""
+		)
+	)
+
+	var equipment_type: String = (
+		get_required_equipment_type(
+			job_type
+		)
+	)
+
+	if not reserve_equipment(
+		equipment_type
+	):
+		return
+
 	job["state"] = STATE_WORKING
 
 	job["worker_id"] = int(
@@ -314,6 +354,8 @@ func assign_job_to_worker(
 	worker["job_id"] = int(
 		job["id"]
 	)
+
+	worker["equipment_type"] = equipment_type
 
 	worker["position"] = first_position
 	worker["direction"] = Vector2.RIGHT
@@ -339,8 +381,20 @@ func release_worker(
 	worker: Dictionary
 ) -> void:
 
+	var equipment_type: String = String(
+		worker.get(
+			"equipment_type",
+			""
+		)
+	)
+
+	release_equipment(
+		equipment_type
+	)
+
 	worker["state"] = WORKER_IDLE
 	worker["job_id"] = -1
+	worker["equipment_type"] = ""
 
 	worker["travelling"] = false
 	worker["travel_path"] = []
@@ -352,6 +406,154 @@ func release_worker(
 	)
 
 	workers_changed.emit()
+
+
+# ==================================================
+# EQUIPMENT SCHEDULING
+# ==================================================
+
+func get_required_equipment_type(
+	job_type: String
+) -> String:
+
+	if economy_manager == null:
+		return ""
+
+	match job_type:
+
+		JOB_MOW:
+			return economy_manager.EQUIPMENT_MOWER
+
+		JOB_BRUSH:
+			return economy_manager.EQUIPMENT_BRUSH_CUTTER
+
+		JOB_TREE:
+			return economy_manager.EQUIPMENT_CHAINSAW
+
+	return ""
+
+
+func get_reserved_equipment_count(
+	equipment_type: String
+) -> int:
+
+	if equipment_type.is_empty():
+		return 0
+
+	return int(
+		reserved_equipment.get(
+			equipment_type,
+			0
+		)
+	)
+
+
+func get_available_equipment_count(
+	equipment_type: String
+) -> int:
+
+	if equipment_type.is_empty():
+		return 999999
+
+	if economy_manager == null:
+		return 999999
+
+	return max(
+		0,
+		economy_manager.get_work_equipment_count(
+			equipment_type
+		)
+		- get_reserved_equipment_count(
+			equipment_type
+		)
+	)
+
+
+func is_required_equipment_available(
+	job_type: String
+) -> bool:
+
+	var equipment_type: String = (
+		get_required_equipment_type(
+			job_type
+		)
+	)
+
+	return (
+		get_available_equipment_count(
+			equipment_type
+		)
+		> 0
+	)
+
+
+func reserve_equipment(
+	equipment_type: String
+) -> bool:
+
+	if equipment_type.is_empty():
+		return true
+
+	if get_available_equipment_count(
+		equipment_type
+	) <= 0:
+		return false
+
+	reserved_equipment[
+		equipment_type
+	] = (
+		get_reserved_equipment_count(
+			equipment_type
+		)
+		+ 1
+	)
+
+	return true
+
+
+func release_equipment(
+	equipment_type: String
+) -> void:
+
+	if equipment_type.is_empty():
+		return
+
+	var reserved_count: int = (
+		get_reserved_equipment_count(
+			equipment_type
+		)
+	)
+
+	if reserved_count <= 1:
+		reserved_equipment.erase(
+			equipment_type
+		)
+		return
+
+	reserved_equipment[
+		equipment_type
+	] = reserved_count - 1
+
+
+func get_job_equipment_display_name(
+	job_type: String
+) -> String:
+
+	var equipment_type: String = (
+		get_required_equipment_type(
+			job_type
+		)
+	)
+
+	if equipment_type.is_empty():
+		return ""
+
+	if economy_manager == null:
+		return "Equipment"
+
+	return economy_manager.get_work_equipment_display_name(
+		equipment_type
+	)
 
 
 # ==================================================
