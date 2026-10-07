@@ -7,6 +7,7 @@ extends Node
 # ==================================================
 
 signal viewed_object_changed(object_data: Dictionary)
+signal pending_edit_changed(pending: bool)
 
 
 # ==================================================
@@ -85,9 +86,20 @@ var landscape_selected_lookup: Dictionary = {}
 var last_landscape_local_position := Vector2.ZERO
 var has_last_landscape_position := false
 
-var tool_just_selected := false
-
 var viewed_object: Dictionary = {}
+
+# Pending transaction state.
+# Edits stay live so the player can keep painting/moving things, but they
+# are not committed until the checkmark is pressed.
+var pending_edit_active := false
+var pending_course_snapshot: Array = []
+var pending_economy_snapshot: Dictionary = {}
+
+var pending_mow_cells: Array[Vector2i] = []
+var pending_mow_lookup: Dictionary = {}
+
+var pending_brush_cells: Array[Vector2i] = []
+var pending_brush_lookup: Dictionary = {}
 
 
 # ==================================================
@@ -127,9 +139,7 @@ func set_tool(
 	else:
 		current_tool = new_tool
 
-	tool_just_selected = true
-
-	clear_drag_state()
+	clear_active_gesture()
 	clear_viewed_object()
 
 	if course_renderer != null:
@@ -230,10 +240,6 @@ func touch_pressed(
 ) -> bool:
 	if not references_ready():
 		return false
-
-	if tool_just_selected:
-		tool_just_selected = false
-		return true
 
 	var world_position: Vector2 = (
 		camera_controller.screen_to_world(
@@ -375,8 +381,6 @@ func touch_released(
 	if touch_index != active_touch_index:
 		return false
 
-	var was_landscaping: bool = landscaping_active
-
 	var consumed: bool = (
 		dragging_path_point
 		or dragging_tee
@@ -384,10 +388,7 @@ func touch_released(
 		or landscaping_active
 	)
 
-	if was_landscaping:
-		create_landscape_job()
-
-	clear_drag_state()
+	clear_active_gesture()
 
 	return consumed
 
@@ -405,10 +406,9 @@ func handle_landscape_press(
 		)
 	)
 
-	landscaping_active = true
+	begin_pending_edit()
 
-	landscape_selected_cells.clear()
-	landscape_selected_lookup.clear()
+	landscaping_active = true
 
 	last_landscape_local_position = local_position
 	has_last_landscape_position = true
@@ -638,6 +638,16 @@ func add_landscape_cell(
 		cell
 	)
 
+	if current_tool == Tool.MOWER:
+		if not pending_mow_lookup.has(cell):
+			pending_mow_lookup[cell] = true
+			pending_mow_cells.append(cell)
+
+	elif current_tool == Tool.BRUSH:
+		if not pending_brush_lookup.has(cell):
+			pending_brush_lookup[cell] = true
+			pending_brush_cells.append(cell)
+
 	course_renderer.add_landscape_selection_cell(
 		cell
 	)
@@ -651,17 +661,14 @@ func create_landscape_job() -> void:
 	if job_manager == null:
 		return
 
-	if landscape_selected_cells.is_empty():
-		return
-
-	if current_tool == Tool.MOWER:
+	if not pending_mow_cells.is_empty():
 		job_manager.create_mowing_area_job(
-			landscape_selected_cells
+			pending_mow_cells
 		)
 
-	elif current_tool == Tool.BRUSH:
+	if not pending_brush_cells.is_empty():
 		job_manager.create_brush_area_job(
-			landscape_selected_cells
+			pending_brush_cells
 		)
 
 
@@ -718,6 +725,8 @@ func handle_tee_press(
 
 	var tee: Vector2 = hole["tee"]
 
+	begin_pending_edit()
+
 	if tee.x < 0:
 		if not economy_manager.acquire_tee_for_placement():
 			return true
@@ -765,6 +774,8 @@ func handle_basket_press(
 		return false
 
 	var basket: Vector2 = hole["basket"]
+
+	begin_pending_edit()
 
 	if basket.x < 0:
 		if not economy_manager.acquire_basket_for_placement():
@@ -849,6 +860,8 @@ func handle_path_press(
 		)
 	)
 
+	begin_pending_edit()
+
 	var new_point_index: int = (
 		course_manager.insert_path_point(
 			hole_index,
@@ -872,6 +885,8 @@ func handle_path_press(
 func start_path_drag(
 	point_index: int
 ) -> void:
+	begin_pending_edit()
+
 	dragging_path_point = true
 	dragged_path_point_index = point_index
 
@@ -1350,7 +1365,7 @@ func remove_viewed_path_point() -> bool:
 # CLEAR DRAG
 # ==================================================
 
-func clear_drag_state() -> void:
+func clear_active_gesture() -> void:
 	active_touch_index = -1
 
 	dragging_path_point = false
@@ -1361,19 +1376,158 @@ func clear_drag_state() -> void:
 
 	landscaping_active = false
 
-	landscape_selected_cells.clear()
-	landscape_selected_lookup.clear()
-
 	has_last_landscape_position = false
 	last_landscape_local_position = Vector2.ZERO
 
 	if course_renderer != null:
-		course_renderer.clear_landscape_selection()
+		course_renderer.clear_landscape_cursor()
 
 	if camera_controller != null:
 		camera_controller.set_camera_input_enabled(
 			true
 		)
+
+
+func clear_drag_state() -> void:
+	clear_active_gesture()
+	clear_pending_landscape()
+
+
+func clear_pending_landscape() -> void:
+	landscape_selected_cells.clear()
+	landscape_selected_lookup.clear()
+
+	pending_mow_cells.clear()
+	pending_mow_lookup.clear()
+
+	pending_brush_cells.clear()
+	pending_brush_lookup.clear()
+
+	if course_renderer != null:
+		course_renderer.clear_landscape_selection()
+
+
+# ==================================================
+# PENDING EDIT TRANSACTION
+# ==================================================
+
+func begin_pending_edit() -> void:
+	if pending_edit_active:
+		return
+
+	pending_edit_active = true
+
+	pending_course_snapshot = (
+		course_manager.holes.duplicate(true)
+	)
+
+	pending_economy_snapshot = {
+		"cash": economy_manager.cash,
+		"total_spent": economy_manager.total_spent,
+		"total_earned": economy_manager.total_earned,
+		"tee_inventory": economy_manager.tee_inventory,
+		"basket_inventory": economy_manager.basket_inventory
+	}
+
+	pending_edit_changed.emit(true)
+
+
+func has_pending_edit() -> bool:
+	return pending_edit_active
+
+
+func get_pending_landscape_cell_count() -> int:
+	return (
+		pending_mow_cells.size()
+		+ pending_brush_cells.size()
+	)
+
+
+func confirm_pending_edit() -> void:
+	if not pending_edit_active:
+		return
+
+	create_landscape_job()
+
+	pending_edit_active = false
+	pending_course_snapshot.clear()
+	pending_economy_snapshot.clear()
+
+	clear_pending_landscape()
+	clear_active_gesture()
+
+	current_tool = Tool.NONE
+
+	if course_renderer != null:
+		course_renderer.set_path_edit_mode(false)
+		course_renderer.refresh()
+
+	pending_edit_changed.emit(false)
+
+
+func cancel_pending_edit() -> void:
+	if not pending_edit_active:
+		return
+
+	if not pending_course_snapshot.is_empty():
+		course_manager.holes = (
+			pending_course_snapshot.duplicate(true)
+		)
+
+	if not pending_economy_snapshot.is_empty():
+		economy_manager.cash = int(
+			pending_economy_snapshot.get(
+				"cash",
+				economy_manager.cash
+			)
+		)
+
+		economy_manager.total_spent = int(
+			pending_economy_snapshot.get(
+				"total_spent",
+				economy_manager.total_spent
+			)
+		)
+
+		economy_manager.total_earned = int(
+			pending_economy_snapshot.get(
+				"total_earned",
+				economy_manager.total_earned
+			)
+		)
+
+		economy_manager.tee_inventory = int(
+			pending_economy_snapshot.get(
+				"tee_inventory",
+				economy_manager.tee_inventory
+			)
+		)
+
+		economy_manager.basket_inventory = int(
+			pending_economy_snapshot.get(
+				"basket_inventory",
+				economy_manager.basket_inventory
+			)
+		)
+
+	pending_edit_active = false
+	pending_course_snapshot.clear()
+	pending_economy_snapshot.clear()
+
+	clear_pending_landscape()
+	clear_active_gesture()
+
+	current_tool = Tool.NONE
+
+	if course_renderer != null:
+		course_renderer.set_path_edit_mode(false)
+		course_renderer.refresh()
+
+	pending_edit_changed.emit(false)
+
+
+func suspend_active_gesture_for_camera() -> void:
+	clear_active_gesture()
 
 
 # ==================================================
