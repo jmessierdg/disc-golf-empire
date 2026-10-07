@@ -92,6 +92,18 @@ var next_worker_id := 1
 
 
 # ==================================================
+# NAVIGATION CACHE
+# ==================================================
+
+# Water and trees are expensive to rescan every time a worker needs A*.
+# Mowing/brush work does not change either obstacle type, so keep a shared
+# blocked-cell map and rebuild it only when the tree count changes.
+var navigation_blocked_cache: Dictionary = {}
+var navigation_cache_tree_count := -1
+var navigation_cache_ready := false
+
+
+# ==================================================
 # SETUP
 # ==================================================
 
@@ -105,6 +117,8 @@ func setup(
 
 	workers.clear()
 	next_worker_id = 1
+
+	invalidate_navigation_cache()
 
 	for i in range(
 		STARTING_WORKER_COUNT
@@ -200,7 +214,10 @@ func _process(
 			delta
 		)
 
-	if course_renderer != null:
+	if (
+		course_renderer != null
+		and get_working_worker_count() > 0
+	):
 		course_renderer.refresh()
 
 
@@ -1598,8 +1615,11 @@ func find_navigation_path(
 			):
 				continue
 
-			if blocked_cells.has(
-				neighbor
+			if (
+				neighbor != target_cell
+				and blocked_cells.has(
+					neighbor
+				)
 			):
 				continue
 
@@ -1662,11 +1682,40 @@ func find_navigation_path(
 # ==================================================
 
 func build_navigation_blocked_cells(
-	start_cell: Vector2i,
-	target_cell: Vector2i
+	_start_cell: Vector2i,
+	_target_cell: Vector2i
 ) -> Dictionary:
 
-	var blocked: Dictionary = {}
+	var current_tree_count: int = (
+		property_manager.trees.size()
+	)
+
+	if (
+		navigation_cache_ready
+		and current_tree_count == navigation_cache_tree_count
+	):
+		return navigation_blocked_cache
+
+	rebuild_navigation_cache()
+
+	return navigation_blocked_cache
+
+
+func invalidate_navigation_cache() -> void:
+
+	navigation_blocked_cache.clear()
+	navigation_cache_tree_count = -1
+	navigation_cache_ready = false
+
+
+func rebuild_navigation_cache() -> void:
+
+	navigation_blocked_cache.clear()
+
+	if property_manager == null:
+		navigation_cache_tree_count = -1
+		navigation_cache_ready = true
+		return
 
 	for y in range(
 		property_manager.PROPERTY_GRID_HEIGHT
@@ -1681,7 +1730,7 @@ func build_navigation_blocked_cells(
 				y
 			):
 
-				blocked[
+				navigation_blocked_cache[
 					Vector2i(
 						x,
 						y
@@ -1705,19 +1754,15 @@ func build_navigation_blocked_cells(
 			tree_cell.y
 		):
 
-			blocked[
+			navigation_blocked_cache[
 				tree_cell
 			] = true
 
-	blocked.erase(
-		start_cell
+	navigation_cache_tree_count = (
+		property_manager.trees.size()
 	)
 
-	blocked.erase(
-		target_cell
-	)
-
-	return blocked
+	navigation_cache_ready = true
 
 
 # ==================================================
