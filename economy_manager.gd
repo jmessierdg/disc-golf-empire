@@ -24,6 +24,19 @@ const LAND_CLEAR_COST: int = 25
 
 
 # ==================================================
+# WORK EQUIPMENT
+# ==================================================
+
+const EQUIPMENT_MOWER := "mower"
+const EQUIPMENT_BRUSH_CUTTER := "brush_cutter"
+const EQUIPMENT_CHAINSAW := "chainsaw"
+
+const STARTING_MOWERS: int = 1
+const STARTING_BRUSH_CUTTERS: int = 1
+const STARTING_CHAINSAWS: int = 0
+
+
+# ==================================================
 # MONEY
 # ==================================================
 
@@ -34,11 +47,18 @@ var total_earned: int = 0
 
 
 # ==================================================
-# EQUIPMENT INVENTORY
+# PLACEMENT INVENTORY
 # ==================================================
 
 var tee_inventory: int = 0
 var basket_inventory: int = 0
+
+
+# ==================================================
+# WORK EQUIPMENT INVENTORY
+# ==================================================
+
+var work_equipment: Dictionary = {}
 
 
 # ==================================================
@@ -64,6 +84,12 @@ func reset_economy() -> void:
 	tee_inventory = 0
 	basket_inventory = 0
 
+	work_equipment = {
+		EQUIPMENT_MOWER: STARTING_MOWERS,
+		EQUIPMENT_BRUSH_CUTTER: STARTING_BRUSH_CUTTERS,
+		EQUIPMENT_CHAINSAW: STARTING_CHAINSAWS
+	}
+
 
 # ==================================================
 # CAN AFFORD?
@@ -87,15 +113,12 @@ func spend(
 	if amount <= 0:
 		return true
 
-
 	if not can_afford(
 		amount
 	):
 		return false
 
-
 	cash -= amount
-
 	total_spent += amount
 
 	return true
@@ -112,9 +135,7 @@ func earn(
 	if amount <= 0:
 		return
 
-
 	cash += amount
-
 	total_earned += amount
 
 
@@ -127,15 +148,12 @@ func acquire_tee_for_placement() -> bool:
 	if tee_inventory > 0:
 
 		tee_inventory -= 1
-
 		return true
-
 
 	if not spend(
 		TEE_INSTALL_COST
 	):
 		return false
-
 
 	return true
 
@@ -149,21 +167,18 @@ func acquire_basket_for_placement() -> bool:
 	if basket_inventory > 0:
 
 		basket_inventory -= 1
-
 		return true
-
 
 	if not spend(
 		BASKET_INSTALL_COST
 	):
 		return false
 
-
 	return true
 
 
 # ==================================================
-# RETURN EQUIPMENT
+# RETURN PLACEMENT EQUIPMENT
 # ==================================================
 
 func return_tee_to_inventory() -> void:
@@ -174,6 +189,113 @@ func return_tee_to_inventory() -> void:
 func return_basket_to_inventory() -> void:
 
 	basket_inventory += 1
+
+
+# ==================================================
+# WORK EQUIPMENT API
+# ==================================================
+
+func get_work_equipment_count(
+	equipment_type: String
+) -> int:
+
+	return int(
+		work_equipment.get(
+			equipment_type,
+			0
+		)
+	)
+
+
+func has_work_equipment(
+	equipment_type: String,
+	amount: int = 1
+) -> bool:
+
+	if equipment_type.is_empty():
+		return true
+
+	return (
+		get_work_equipment_count(
+			equipment_type
+		)
+		>= amount
+	)
+
+
+func add_work_equipment(
+	equipment_type: String,
+	amount: int = 1
+) -> void:
+
+	if equipment_type.is_empty():
+		return
+
+	if amount <= 0:
+		return
+
+	work_equipment[
+		equipment_type
+	] = (
+		get_work_equipment_count(
+			equipment_type
+		)
+		+ amount
+	)
+
+
+func remove_work_equipment(
+	equipment_type: String,
+	amount: int = 1
+) -> bool:
+
+	if equipment_type.is_empty():
+		return true
+
+	if amount <= 0:
+		return true
+
+	if not has_work_equipment(
+		equipment_type,
+		amount
+	):
+		return false
+
+	work_equipment[
+		equipment_type
+	] = (
+		get_work_equipment_count(
+			equipment_type
+		)
+		- amount
+	)
+
+	return true
+
+
+func get_all_work_equipment() -> Dictionary:
+
+	return work_equipment.duplicate(
+		true
+	)
+
+
+func get_work_equipment_display_name(
+	equipment_type: String
+) -> String:
+
+	match equipment_type:
+
+		EQUIPMENT_MOWER:
+			return "Push Mower"
+
+		EQUIPMENT_BRUSH_CUTTER:
+			return "Brush Cutter"
+
+		EQUIPMENT_CHAINSAW:
+			return "Chainsaw"
+
+	return "Equipment"
 
 
 # ==================================================
@@ -232,14 +354,10 @@ func get_tree_removal_cost(
 ) -> int:
 
 	if tree_scale < 0.85:
-
 		return SMALL_TREE_REMOVAL_COST
 
-
 	if tree_scale < 1.2:
-
 		return MEDIUM_TREE_REMOVAL_COST
-
 
 	return LARGE_TREE_REMOVAL_COST
 
@@ -262,9 +380,7 @@ func format_money(
 	)
 
 	var formatted: String = ""
-
 	var digit_count: int = 0
-
 
 	for i in range(
 		amount_string.length() - 1,
@@ -279,7 +395,6 @@ func format_money(
 
 			formatted = "," + formatted
 
-
 		formatted = (
 			amount_string[i]
 			+ formatted
@@ -287,10 +402,7 @@ func format_money(
 
 		digit_count += 1
 
-
 	if amount < 0:
-
 		formatted = "-" + formatted
-
 
 	return "$" + formatted
