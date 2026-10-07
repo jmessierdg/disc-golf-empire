@@ -109,6 +109,16 @@ var tooltip_label: Label
 
 
 # ==================================================
+# PENDING EDIT CONFIRMATION
+# ==================================================
+
+var pending_panel: PanelContainer
+var pending_label: Label
+var pending_confirm_button: Button
+var pending_cancel_button: Button
+
+
+# ==================================================
 # OBJECT INSPECTOR
 # ==================================================
 
@@ -157,6 +167,14 @@ func setup(
 				_on_viewed_object_changed
 			)
 
+		if not course_builder.pending_edit_changed.is_connected(
+			_on_pending_edit_changed
+		):
+
+			course_builder.pending_edit_changed.connect(
+				_on_pending_edit_changed
+			)
+
 	if job_manager != null:
 
 		if not job_manager.jobs_changed.is_connected(
@@ -187,6 +205,7 @@ func create_interface() -> void:
 	create_top_hud()
 	create_tool_dock()
 	create_tooltip()
+	create_pending_panel()
 	create_inspector()
 	create_crew_panel()
 
@@ -947,6 +966,146 @@ func create_tooltip() -> void:
 
 
 # ==================================================
+# PENDING EDIT CONFIRMATION
+# ==================================================
+
+func create_pending_panel() -> void:
+
+	pending_panel = PanelContainer.new()
+	pending_panel.name = "PendingEdit"
+
+	pending_panel.set_anchors_preset(
+		Control.PRESET_CENTER_BOTTOM
+	)
+
+	pending_panel.offset_left = -290.0
+	pending_panel.offset_top = -322.0
+	pending_panel.offset_right = 290.0
+	pending_panel.offset_bottom = -258.0
+
+	pending_panel.add_theme_stylebox_override(
+		"panel",
+		create_floating_panel_style()
+	)
+
+	add_child(
+		pending_panel
+	)
+
+
+	var margin := MarginContainer.new()
+
+	margin.add_theme_constant_override(
+		"margin_left",
+		12
+	)
+
+	margin.add_theme_constant_override(
+		"margin_right",
+		12
+	)
+
+	margin.add_theme_constant_override(
+		"margin_top",
+		8
+	)
+
+	margin.add_theme_constant_override(
+		"margin_bottom",
+		8
+	)
+
+	pending_panel.add_child(
+		margin
+	)
+
+
+	var row := HBoxContainer.new()
+
+	row.add_theme_constant_override(
+		"separation",
+		10
+	)
+
+	margin.add_child(
+		row
+	)
+
+
+	pending_label = Label.new()
+
+	pending_label.text = "PENDING CHANGES"
+	pending_label.size_flags_horizontal = (
+		Control.SIZE_EXPAND_FILL
+	)
+
+	pending_label.vertical_alignment = (
+		VERTICAL_ALIGNMENT_CENTER
+	)
+
+	pending_label.add_theme_font_size_override(
+		"font_size",
+		17
+	)
+
+	pending_label.add_theme_color_override(
+		"font_color",
+		COLOR_GOLD
+	)
+
+	row.add_child(
+		pending_label
+	)
+
+
+	pending_cancel_button = create_ui_button(
+		"✕",
+		Vector2(64, 46)
+	)
+
+	pending_cancel_button.add_theme_stylebox_override(
+		"normal",
+		create_button_style(
+			COLOR_RED_DARK,
+			COLOR_RED
+		)
+	)
+
+	pending_cancel_button.pressed.connect(
+		_on_pending_cancel_pressed
+	)
+
+	row.add_child(
+		pending_cancel_button
+	)
+
+
+	pending_confirm_button = create_ui_button(
+		"✓",
+		Vector2(76, 46)
+	)
+
+	pending_confirm_button.add_theme_stylebox_override(
+		"normal",
+		create_button_style(
+			COLOR_GREEN_DARK,
+			COLOR_GREEN
+		)
+	)
+
+	pending_confirm_button.pressed.connect(
+		_on_pending_confirm_pressed
+	)
+
+	row.add_child(
+		pending_confirm_button
+	)
+
+
+	pending_panel.visible = false
+
+
+# ==================================================
 # INSPECTOR
 # ==================================================
 
@@ -1676,6 +1835,32 @@ func _on_reset_camera_pressed() -> void:
 
 
 # ==================================================
+# PENDING EDIT CALLBACKS
+# ==================================================
+
+func _on_pending_edit_changed(
+	_pending: bool
+) -> void:
+
+	update_pending_panel()
+	update_interface()
+
+
+func _on_pending_confirm_pressed() -> void:
+
+	course_builder.confirm_pending_edit()
+
+	update_interface()
+
+
+func _on_pending_cancel_pressed() -> void:
+
+	course_builder.cancel_pending_edit()
+
+	update_interface()
+
+
+# ==================================================
 # CREW CALLBACKS
 # ==================================================
 
@@ -1702,6 +1887,7 @@ func _on_crew_close_pressed() -> void:
 func _on_workforce_changed() -> void:
 
 	update_workforce_information()
+	update_pending_panel()
 
 	if crew_panel_open:
 		update_crew_panel()
@@ -1774,9 +1960,47 @@ func update_interface() -> void:
 	update_course_information()
 	update_economy_information()
 	update_workforce_information()
+	update_pending_panel()
 
 	if crew_panel_open:
 		update_crew_panel()
+
+
+# ==================================================
+# PENDING EDIT PANEL
+# ==================================================
+
+func update_pending_panel() -> void:
+
+	if pending_panel == null:
+		return
+
+	var pending: bool = (
+		course_builder.has_pending_edit()
+	)
+
+	pending_panel.visible = pending
+
+	if not pending:
+		return
+
+	var selected_cells: int = (
+		course_builder.get_pending_landscape_cell_count()
+	)
+
+	if selected_cells > 0:
+
+		pending_label.text = (
+			"PENDING  •  "
+			+ str(selected_cells)
+			+ " CELLS"
+		)
+
+	else:
+
+		pending_label.text = (
+			"PENDING CHANGES"
+		)
 
 
 # ==================================================
