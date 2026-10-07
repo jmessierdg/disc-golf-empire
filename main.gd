@@ -316,14 +316,20 @@ func handle_touch_pressed(
 
 	if active_screen_touches.size() >= 2:
 
-		builder_consumed_touch[
-			touch_event.index
-		] = false
+		# A second finger always means camera navigation.
+		# End the current edit gesture without discarding the pending edit.
+		course_builder.suspend_active_gesture_for_camera()
 
-		camera_controller.register_touch(
-			touch_event.index,
-			touch_event.position
-		)
+		for touch_key in active_screen_touches.keys():
+
+			builder_consumed_touch[
+				touch_key
+			] = false
+
+			camera_controller.register_touch(
+				touch_key,
+				active_screen_touches[touch_key]
+			)
 
 		return
 
