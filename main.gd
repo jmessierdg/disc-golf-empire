@@ -209,7 +209,8 @@ func create_components() -> void:
 
 	job_manager.setup(
 		property_manager,
-		course_renderer
+		course_renderer,
+		economy_manager
 	)
 
 
