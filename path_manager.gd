@@ -1,5 +1,6 @@
 # Disc Golf Empire - Update 15: independently rendered walking-trail construction.
 # Flight paths remain in CourseManager; these are physical visitor walkways.
+# Draw order is controlled by main.gd: paths z=1, below foliage and actors.
 extends Node2D
 
 signal paths_changed
