@@ -1347,6 +1347,7 @@ func remove_viewed_tree() -> bool:
 	property_manager.remove_property_tree(
 		tree_index
 	)
+	course_renderer.refresh_world()
 
 	clear_viewed_object()
 	course_renderer.refresh()
