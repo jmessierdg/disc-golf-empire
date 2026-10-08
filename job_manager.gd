@@ -415,14 +415,19 @@ func finish_equipment_return(worker: Dictionary) -> void:
 
 
 func get_maintenance_local_position() -> Vector2:
+	# Equipment is collected at the exterior yard, NEVER inside the shed.
 	if property_manager == null:
 		return Vector2(80.0, 80.0)
-	var shed: Dictionary = property_manager.get_starter_facility("starter_shed")
-	if not shed.is_empty():
-		return property_manager.world_to_property_local(shed["position"])
 	var yard: Dictionary = property_manager.get_starter_facility("starter_yard")
 	if not yard.is_empty():
-		return property_manager.world_to_property_local(yard["position"])
+		var center: Vector2 = property_manager.world_to_property_local(yard["position"])
+		var size: Vector2 = yard["size"]
+		return center + Vector2(0.0, size.y * 0.5 + property_manager.CELL_SIZE * 0.7)
+	var shed: Dictionary = property_manager.get_starter_facility("starter_shed")
+	if not shed.is_empty():
+		var center: Vector2 = property_manager.world_to_property_local(shed["position"])
+		var size: Vector2 = shed["size"]
+		return center + Vector2(0.0, size.y * 0.5 + property_manager.CELL_SIZE * 0.7)
 	return property_manager.get_property_world_rect().size * 0.5
 
 
@@ -432,16 +437,38 @@ func get_worker_cell(local_pos: Vector2) -> Vector2i:
 
 func set_worker_route(worker: Dictionary, target: Vector2) -> bool:
 	var current: Vector2 = worker.get("position", target)
-	var path: Array[Vector2i] = find_navigation_path(get_worker_cell(current), get_worker_cell(target))
-	if path.is_empty() and current.distance_to(target) > property_manager.CELL_SIZE * 1.5:
+	var start_cell: Vector2i = get_worker_cell(current)
+	var target_cell: Vector2i = get_worker_cell(target)
+	var blocked: Dictionary = build_navigation_blocked_cells(start_cell, target_cell)
+	if blocked.has(target_cell):
+		target_cell = find_nearest_walkable_cell(target_cell, blocked)
+		if target_cell.x < 0:
+			return false
+		target = get_cell_center_local(target_cell)
+	var path: Array[Vector2i] = find_navigation_path(start_cell, target_cell)
+	if path.is_empty() and start_cell != target_cell:
 		return false
 	var route: Array = []
 	for cell in path:
 		route.append(get_cell_center_local(cell))
-	route.append(target)
+	# Only use the exact target when its cell is walkable.
+	if route.is_empty() or route[-1].distance_to(target) > 0.5:
+		route.append(target)
 	worker["movement_path"] = route
 	worker["movement_index"] = 0
 	return true
+
+
+func find_nearest_walkable_cell(target: Vector2i, blocked: Dictionary) -> Vector2i:
+	for radius in range(1, 9):
+		for dy in range(-radius, radius + 1):
+			for dx in range(-radius, radius + 1):
+				if absi(dx) != radius and absi(dy) != radius:
+					continue
+				var cell: Vector2i = target + Vector2i(dx, dy)
+				if property_manager.is_valid_cell(cell.x, cell.y) and not blocked.has(cell):
+					return cell
+	return Vector2i(-1, -1)
 
 
 func follow_worker_route(worker: Dictionary, delta: float) -> bool:
@@ -1895,12 +1922,7 @@ func find_navigation_path(
 			):
 				continue
 
-			if (
-				neighbor != target_cell
-				and blocked_cells.has(
-					neighbor
-				)
-			):
+			if blocked_cells.has(neighbor):
 				continue
 
 			var tentative_g: float = (
@@ -2037,6 +2059,28 @@ func rebuild_navigation_cache() -> void:
 			navigation_blocked_cache[
 				tree_cell
 			] = true
+
+	# Building footprints are solid, including the shed, office and
+	# equipment yard. Use a small clearance around the exterior walls.
+	for building_value in property_manager.buildings:
+		var building: Dictionary = building_value
+		var kind: String = str(building.get("type", ""))
+		if not kind.begins_with("starter_"):
+			continue
+		if kind == "starter_parking":
+			continue
+		var center: Vector2 = property_manager.world_to_property_local(building["position"])
+		var dimensions: Vector2 = building["size"]
+		var footprint: Rect2 = Rect2(center - dimensions * 0.5, dimensions).grow(5.0)
+		var min_x: int = maxi(0, int(floor(footprint.position.x / property_manager.CELL_SIZE)))
+		var max_x: int = mini(property_manager.PROPERTY_GRID_WIDTH - 1, int(floor(footprint.end.x / property_manager.CELL_SIZE)))
+		var min_y: int = maxi(0, int(floor(footprint.position.y / property_manager.CELL_SIZE)))
+		var max_y: int = mini(property_manager.PROPERTY_GRID_HEIGHT - 1, int(floor(footprint.end.y / property_manager.CELL_SIZE)))
+		for y in range(min_y, max_y + 1):
+			for x in range(min_x, max_x + 1):
+				var center_point: Vector2 = property_manager.cell_to_world_center(Vector2i(x, y))
+				if footprint.has_point(center_point):
+					navigation_blocked_cache[Vector2i(x, y)] = true
 
 	navigation_cache_tree_count = (
 		property_manager.trees.size()
