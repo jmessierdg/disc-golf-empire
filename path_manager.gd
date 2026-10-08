@@ -22,6 +22,8 @@ var trails: Array = []
 var next_trail_id: int = 1
 var status: String = "Select WALKWAY to plan a walking trail."
 var draw_clock: float = 0.0
+var walkway_cell_cache: Dictionary = {}
+var walkway_cache_dirty: bool = true
 
 func setup(property_ref, economy_ref, job_ref, course_ref) -> void:
 	property_manager = property_ref
@@ -110,6 +112,7 @@ func confirm_draft() -> bool:
 	editing = false
 	status = "Walkway #%d queued for construction ($%d)." % [int(record["id"]), price]
 	status_changed.emit(status)
+	walkway_cache_dirty = true
 	paths_changed.emit()
 	queue_redraw()
 	return true
@@ -151,12 +154,14 @@ func _process(delta: float) -> void:
 				trail["worker_id"] = -1
 				status = "Walkway #%d complete and ready for golfers." % int(trail["id"])
 				status_changed.emit(status)
+				walkway_cache_dirty = true
 				paths_changed.emit()
 		dirty = true
 	if dirty:
 		draw_clock += delta
 		if draw_clock >= 0.1:
 			draw_clock = 0.0
+			walkway_cache_dirty = true
 			queue_redraw()
 			# Worker graphics are already on the independent dynamic renderer.
 			if job_manager.course_renderer != null:
@@ -201,6 +206,13 @@ func point_along(points: Array, distance: float) -> Vector2:
 		remaining -= length
 	return points[-1]
 
+# A rounded stroke at each waypoint merges turns and overlapping trails.
+# Intersections automatically blend into smooth T- and four-way junctions.
+func draw_round_stroke(from_point: Vector2, to_point: Vector2, tint: Color, width: float) -> void:
+	draw_line(from_point, to_point, tint, width, true)
+	draw_circle(from_point, width * 0.5, tint)
+	draw_circle(to_point, width * 0.5, tint)
+
 func _draw() -> void:
 	if property_manager == null:
 		return
@@ -215,11 +227,12 @@ func _draw() -> void:
 			var length: float = start.distance_to(finish)
 			var first: Vector2 = property_manager.property_local_to_world(start)
 			var last: Vector2 = property_manager.property_local_to_world(finish)
-			draw_line(first, last, Color(0.26, 0.23, 0.16, 0.65), 13.0, true)
+			# Dark base is the surveyed trail corridor; completed sections are lighter.
+			draw_round_stroke(first, last, Color(0.26, 0.23, 0.16, 0.65), 13.0)
 			if built_distance > covered:
 				var fraction: float = clampf((built_distance - covered) / maxf(length, 0.001), 0.0, 1.0)
 				var partial: Vector2 = first.lerp(last, fraction)
-				draw_line(first, partial, Color(0.76, 0.64, 0.39, 1.0), 10.0, true)
+				draw_round_stroke(first, partial, Color(0.76, 0.64, 0.39, 1.0), 10.0)
 			covered += length
 	if draft.size() > 0:
 		for index in range(draft.size()):
@@ -227,7 +240,37 @@ func _draw() -> void:
 			draw_circle(world_point, 8.0, Color(0.35, 0.92, 0.48, 0.85))
 			if index > 0:
 				var previous: Vector2 = property_manager.property_local_to_world(draft[index - 1])
-				draw_line(previous, world_point, Color(0.35, 0.92, 0.48, 0.85), 7.0, true)
+				draw_round_stroke(previous, world_point, Color(0.35, 0.92, 0.48, 0.85), 7.0)
+
+# Sample built trail corridors once into a shared lookup for worker and future
+# golfer navigation. Do not sample these paths inside each A* node expansion.
+func get_walkway_cells() -> Dictionary:
+	if not walkway_cache_dirty:
+		return walkway_cell_cache
+	walkway_cell_cache.clear()
+	if property_manager == null:
+		return walkway_cell_cache
+	for trail_value in trails:
+		var trail: Dictionary = trail_value
+		var points: Array = trail["points"]
+		var built_length: float = float(trail["built"])
+		var covered: float = 0.0
+		for index in range(1, points.size()):
+			if covered >= built_length:
+				break
+			var first: Vector2 = points[index - 1]
+			var last: Vector2 = points[index]
+			var length: float = first.distance_to(last)
+			var usable: float = minf(length, built_length - covered)
+			var steps: int = maxi(1, ceili(usable / 8.0))
+			for step in range(steps + 1):
+				var location: Vector2 = first.lerp(last, (usable * float(step) / float(steps)) / maxf(length, 0.001))
+				var cell: Vector2i = property_manager.world_to_cell(location)
+				if property_manager.is_valid_cell(cell.x, cell.y):
+					walkway_cell_cache[cell] = true
+			covered += length
+	walkway_cache_dirty = false
+	return walkway_cell_cache
 
 func get_completed_trails() -> Array:
 	var result: Array = []
