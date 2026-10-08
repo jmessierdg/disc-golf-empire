@@ -302,6 +302,7 @@ func _draw() -> void:
 	draw_property_bushes()
 	draw_property_brush()
 	draw_property_trees()
+	draw_starter_facilities()
 
 	draw_property_boundary()
 
@@ -318,6 +319,45 @@ func _draw() -> void:
 # ==================================================
 # WORLD BACKGROUND
 # ==================================================
+
+# ==================================================
+# STARTER FACILITIES
+# ==================================================
+
+func draw_starter_facilities() -> void:
+	for value in property_manager.buildings:
+		var item: Dictionary = value
+		var kind: String = str(item.get("type", ""))
+		if not kind.begins_with("starter_"):
+			continue
+		var center: Vector2 = item["position"]
+		var dimensions: Vector2 = item["size"]
+		var area: Rect2 = Rect2(center - dimensions * 0.5, dimensions)
+		if kind == "starter_parking":
+			draw_rect(area, Color(0.40, 0.39, 0.35), true)
+			draw_rect(area, Color(0.74, 0.70, 0.59), false, 3.0)
+			for i in range(1, 7):
+				var stripe_x: float = area.position.x + float(i) * area.size.x / 7.0
+				draw_line(Vector2(stripe_x, area.position.y + 6.0), Vector2(stripe_x, area.position.y + area.size.y * 0.38), Color(0.87, 0.84, 0.74), 2.0)
+			continue
+		if kind == "starter_yard":
+			draw_rect(area, Color(0.46, 0.42, 0.34), true)
+			draw_rect(area, Color(0.76, 0.67, 0.42), false, 3.0)
+			for i in range(3):
+				var spot: Vector2 = area.position + Vector2(20.0 + float(i) * 43.0, area.size.y * 0.5)
+				draw_rect(Rect2(spot, Vector2(23.0, 13.0)), Color(0.25, 0.47, 0.28), true)
+			continue
+		var roof: Color = Color(0.21, 0.37, 0.43)
+		if kind == "starter_shed":
+			roof = Color(0.34, 0.41, 0.35)
+		draw_rect(Rect2(area.position + Vector2(5.0, 6.0), area.size), Color(0.0, 0.0, 0.0, 0.25), true)
+		draw_rect(area, Color(0.75, 0.70, 0.57), true)
+		draw_rect(area.grow(-6.0), roof, true)
+		draw_line(Vector2(center.x, area.position.y + 7.0), Vector2(center.x, area.end.y - 7.0), Color(0.78, 0.78, 0.70), 3.0)
+		draw_rect(area, Color(0.18, 0.21, 0.20), false, 3.0)
+		var caption: String = "OFFICE" if kind == "starter_office" else "MAINTENANCE"
+		draw_string(ThemeDB.fallback_font, Vector2(area.position.x, area.position.y - 8.0), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
+
 
 func draw_world_background() -> void:
 
