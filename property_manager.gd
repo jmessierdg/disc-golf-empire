@@ -1075,13 +1075,15 @@ func add_driveway(points: Array) -> void:
 # ==================================================
 
 func generate_starter_facilities() -> void:
-	var cell: float = CELL_SIZE
+	# All dimensions are in feet converted to game pixels (15 ft per cell).
+	var unit: float = CELL_SIZE / 15.0
 	var origin: Vector2 = property_world_origin
+	var entry_x: float = property_driveway_points[3].x
 	var layout: Array = [
-		{"type": "starter_office", "position": origin + Vector2(13.0, 11.0) * cell, "size": Vector2(4.0, 3.0) * cell, "rotation": 0.0},
-		{"type": "starter_shed", "position": origin + Vector2(28.0, 11.0) * cell, "size": Vector2(5.0, 3.5) * cell, "rotation": 0.0},
-		{"type": "starter_parking", "position": origin + Vector2(20.0, 7.0) * cell, "size": Vector2(9.0, 4.0) * cell, "rotation": 0.0},
-		{"type": "starter_yard", "position": origin + Vector2(28.0, 17.0) * cell, "size": Vector2(6.0, 4.0) * cell, "rotation": 0.0}
+		{"type": "starter_parking", "position": Vector2(entry_x + 34.0 * unit, origin.y + 112.0 * unit), "size": Vector2(66.0, 82.0) * unit, "rotation": 0.0},
+		{"type": "starter_office", "position": Vector2(entry_x - 35.0 * unit, origin.y + 119.0 * unit), "size": Vector2(24.0, 30.0) * unit, "rotation": 0.0},
+		{"type": "starter_shed", "position": Vector2(entry_x - 62.0 * unit, origin.y + 206.0 * unit), "size": Vector2(32.0, 42.0) * unit, "rotation": 0.0},
+		{"type": "starter_yard", "position": Vector2(entry_x + 8.0 * unit, origin.y + 214.0 * unit), "size": Vector2(46.0, 54.0) * unit, "rotation": 0.0}
 	]
 	var owned: Rect2 = get_property_world_rect()
 	for value in layout:
@@ -1091,28 +1093,32 @@ func generate_starter_facilities() -> void:
 		var footprint: Rect2 = Rect2(center - dimensions * 0.5, dimensions)
 		if not owned.encloses(footprint):
 			continue
+		# Reserve the footprint and surrounding access clearances.
+		var clearance: Rect2 = footprint.grow(10.0 * unit)
+		var has_water: bool = false
+		for y in range(maxi(0, int(floor((clearance.position.y - origin.y) / CELL_SIZE))), mini(PROPERTY_GRID_HEIGHT, int(ceil((clearance.end.y - origin.y) / CELL_SIZE)))):
+			for x in range(maxi(0, int(floor((clearance.position.x - origin.x) / CELL_SIZE))), mini(PROPERTY_GRID_WIDTH, int(ceil((clearance.end.x - origin.x) / CELL_SIZE)))):
+				if terrain[y][x] == WATER:
+					has_water = true
+		if has_water:
+			continue
 		buildings.append(item)
-		var local_min: Vector2 = footprint.position - origin
-		var local_max: Vector2 = footprint.end - origin
-		var x0: int = maxi(0, int(floor(local_min.x / cell)))
-		var x1: int = mini(PROPERTY_GRID_WIDTH - 1, int(ceil(local_max.x / cell)) - 1)
-		var y0: int = maxi(0, int(floor(local_min.y / cell)))
-		var y1: int = mini(PROPERTY_GRID_HEIGHT - 1, int(ceil(local_max.y / cell)) - 1)
-		for y in range(y0, y1 + 1):
-			for x in range(x0, x1 + 1):
-				terrain[y][x] = DIRT
-		for index in range(trees.size() - 1, -1, -1):
-			if footprint.grow(cell * 0.4).has_point(property_local_to_world(trees[index])):
-				trees.remove_at(index)
-				tree_sizes.remove_at(index)
-		for index in range(bushes.size() - 1, -1, -1):
-			if footprint.has_point(property_local_to_world(bushes[index])):
-				bushes.remove_at(index)
-				bush_sizes.remove_at(index)
-		for index in range(brush_clusters.size() - 1, -1, -1):
-			if footprint.has_point(property_local_to_world(brush_clusters[index])):
-				brush_clusters.remove_at(index)
-				brush_sizes.remove_at(index)
+		for y in range(maxi(0, int(floor((clearance.position.y - origin.y) / CELL_SIZE))), mini(PROPERTY_GRID_HEIGHT, int(ceil((clearance.end.y - origin.y) / CELL_SIZE)))):
+			for x in range(maxi(0, int(floor((clearance.position.x - origin.x) / CELL_SIZE))), mini(PROPERTY_GRID_WIDTH, int(ceil((clearance.end.x - origin.x) / CELL_SIZE)))):
+				if terrain[y][x] != WATER:
+					terrain[y][x] = DIRT
+		for i in range(trees.size() - 1, -1, -1):
+			if clearance.has_point(property_local_to_world(trees[i])):
+				trees.remove_at(i)
+				tree_sizes.remove_at(i)
+		for i in range(bushes.size() - 1, -1, -1):
+			if clearance.has_point(property_local_to_world(bushes[i])):
+				bushes.remove_at(i)
+				bush_sizes.remove_at(i)
+		for i in range(brush_clusters.size() - 1, -1, -1):
+			if clearance.has_point(property_local_to_world(brush_clusters[i])):
+				brush_clusters.remove_at(i)
+				brush_sizes.remove_at(i)
 
 
 func generate_property_entrance() -> void:
