@@ -12,6 +12,7 @@ var shuffle_enabled: bool = false
 var loop_enabled: bool = false
 var music_volume: float = 0.65
 var expanded: bool = false
+var docked_to_toolbar := true
 var player: AudioStreamPlayer
 var panel: PanelContainer
 var heading_button: Button
@@ -82,6 +83,7 @@ func build_interface() -> void:
 	panel.custom_minimum_size = Vector2(519.0, 137.0)
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.add_child(panel)
+	panel.visible = false
 
 	var style := StyleBoxFlat.new()
 	style.bg_color = Color(0.065, 0.09, 0.08, 0.96)
@@ -192,8 +194,23 @@ func toggle_expanded() -> void:
 	expanded = not expanded
 	extra_controls.visible = expanded
 	heading_button.text = "♫  DISC GOLF EMPIRE RADIO   ▴" if expanded else "♫  DISC GOLF EMPIRE RADIO   ▾"
-	panel.offset_left = -665.0 if expanded else -535.0
-	panel.custom_minimum_size.x = 649.0 if expanded else 519.0
+	if docked_to_toolbar:
+		panel.visible = expanded
+		panel.anchor_left = 0.0
+		panel.anchor_right = 0.0
+		panel.anchor_top = 0.0
+		panel.anchor_bottom = 0.0
+		var viewport_size: Vector2 = get_viewport().get_visible_rect().size
+		var left_edge: float = minf(580.0, viewport_size.x * 0.47)
+		var panel_width: float = minf(649.0, maxf(300.0, viewport_size.x - left_edge - 16.0))
+		panel.offset_left = left_edge
+		panel.offset_right = left_edge + panel_width
+		panel.offset_top = minf(viewport_size.y * 0.38, viewport_size.y - 360.0)
+		panel.offset_bottom = panel.offset_top + 330.0
+		panel.custom_minimum_size = Vector2.ZERO
+	else:
+		panel.offset_left = -665.0 if expanded else -535.0
+		panel.custom_minimum_size.x = 649.0 if expanded else 519.0
 
 func play_track(index: int) -> void:
 	if tracks.is_empty():
