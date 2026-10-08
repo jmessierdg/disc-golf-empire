@@ -1918,6 +1918,7 @@ func _on_inspector_close_pressed() -> void:
 func _on_inspector_action_pressed() -> void:
 
 	if course_builder.perform_view_action():
+		update_inspector(course_builder.get_viewed_object_info())
 		update_interface()
 
 
