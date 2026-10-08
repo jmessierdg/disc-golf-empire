@@ -14,9 +14,9 @@ var job_manager
 # Separate CanvasItems retain their drawing commands until invalidated.
 # 0 = terrain, 1 = course, 2 = moving characters/jobs, 3 = selection UI.
 var render_layer: int = 0
-var course_layer: CourseRenderer
-var actors_layer: CourseRenderer
-var overlay_layer: CourseRenderer
+var course_layer
+var actors_layer
+var overlay_layer
 var world_dirty: bool = false
 var world_refresh_count: int = 0
 var dynamic_refresh_count: int = 0
@@ -202,21 +202,21 @@ func _process(
 
 # Keep the expensive static canvas untouched for ordinary tool interactions.
 func _create_render_layers() -> void:
-	course_layer = CourseRenderer.new()
+	course_layer = get_script().new()
 	course_layer.name = "CourseCanvas"
 	course_layer.render_layer = 1
 	course_layer.property_manager = property_manager
 	course_layer.course_manager = course_manager
 	add_child(course_layer)
 
-	actors_layer = CourseRenderer.new()
+	actors_layer = get_script().new()
 	actors_layer.name = "ActorsCanvas"
 	actors_layer.render_layer = 2
 	actors_layer.property_manager = property_manager
 	actors_layer.course_manager = course_manager
 	add_child(actors_layer)
 
-	overlay_layer = CourseRenderer.new()
+	overlay_layer = get_script().new()
 	overlay_layer.name = "ToolOverlayCanvas"
 	overlay_layer.render_layer = 3
 	overlay_layer.property_manager = property_manager
