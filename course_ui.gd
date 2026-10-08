@@ -1119,9 +1119,9 @@ func create_inspector() -> void:
 	)
 
 	inspector_panel.offset_left = 28.0
-	inspector_panel.offset_top = -450.0
-	inspector_panel.offset_right = 470.0
-	inspector_panel.offset_bottom = -212.0
+	inspector_panel.offset_top = -620.0
+	inspector_panel.offset_right = 650.0
+	inspector_panel.offset_bottom = -176.0
 
 	inspector_panel.add_theme_stylebox_override(
 		"panel",
@@ -1190,7 +1190,7 @@ func create_inspector() -> void:
 
 	inspector_title.add_theme_font_size_override(
 		"font_size",
-		23
+		27
 	)
 
 	inspector_title.add_theme_color_override(
@@ -1226,7 +1226,7 @@ func create_inspector() -> void:
 
 	inspector_subtitle.add_theme_font_size_override(
 		"font_size",
-		16
+		19
 	)
 
 	inspector_subtitle.add_theme_color_override(
@@ -1247,7 +1247,7 @@ func create_inspector() -> void:
 
 	inspector_detail.add_theme_font_size_override(
 		"font_size",
-		15
+		18
 	)
 
 	inspector_detail.add_theme_color_override(
@@ -1255,9 +1255,12 @@ func create_inspector() -> void:
 		COLOR_MUTED
 	)
 
-	main_vbox.add_child(
-		inspector_detail
-	)
+	var inspector_scroll := ScrollContainer.new()
+	inspector_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	inspector_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	main_vbox.add_child(inspector_scroll)
+	inspector_scroll.add_child(inspector_detail)
+	inspector_detail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 
 	var spacer := Control.new()
@@ -2541,6 +2544,10 @@ func update_crew_panel() -> void:
 		+ " QUEUED"
 	)
 
+	var report_count: int = job_manager.get_worker_observations().size()
+	if report_count > 0:
+		crew_summary_label.text += "  •  " + str(report_count) + " REPORTS"
+
 	for worker_value in all_workers:
 
 		var worker: Dictionary = (
@@ -2692,6 +2699,15 @@ func create_worker_card(
 	box.add_child(
 		status_label
 	)
+
+	var report_text: String = str(worker.get("observation", ""))
+	if not report_text.is_empty():
+		var report_label := Label.new()
+		report_label.text = "REPORT: " + report_text
+		report_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		report_label.add_theme_font_size_override("font_size", 14)
+		report_label.add_theme_color_override("font_color", COLOR_GOLD)
+		box.add_child(report_label)
 
 
 	var job_id: int = int(
