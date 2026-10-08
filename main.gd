@@ -38,6 +38,10 @@ const COURSE_UI_SCRIPT = preload(
 	"res://course_ui.gd"
 )
 
+const RADIO_MANAGER_SCRIPT = preload(
+	"res://radio_manager.gd"
+)
+
 
 # ==================================================
 # COMPONENTS
@@ -51,6 +55,7 @@ var course_renderer
 var camera_controller
 var course_builder
 var course_ui
+var radio_manager
 
 
 # ==================================================
@@ -260,6 +265,12 @@ func create_components() -> void:
 		camera_controller,
 		course_renderer
 	)
+
+
+	# Disc Golf Empire Radio runs independently of gameplay UI.
+	radio_manager = RADIO_MANAGER_SCRIPT.new()
+	radio_manager.name = "RadioManager"
+	add_child(radio_manager)
 
 
 # ==================================================
