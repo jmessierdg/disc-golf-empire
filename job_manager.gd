@@ -53,7 +53,10 @@ const MOW_CELLS_PER_SECOND := 5.0
 const BRUSH_CELLS_PER_SECOND := 2.5
 
 const MIN_WORK_TIME := 0.35
-const WORKER_TRAVEL_SPEED := 220.0
+# Deliberately slower travel than the original 220 px/s.
+const WORKER_TRAVEL_SPEED := 88.0
+const WORKER_INSPECTION_SPEED := 66.0
+const WORKER_EQUIPMENT_SPEED := 77.0
 const ADJACENT_CELL_DISTANCE := 1.1
 
 
@@ -76,6 +79,8 @@ const NAV_DIRECTIONS: Array[Vector2i] = [
 var property_manager
 var course_renderer
 var economy_manager
+var course_manager = null
+var reported_conditions: Dictionary = {}
 
 
 # ==================================================
@@ -125,6 +130,9 @@ func setup(
 	property_manager = property_ref
 	course_renderer = renderer_ref
 	economy_manager = economy_ref
+	# CourseManager is a sibling created before JobManager setup.
+	course_manager = get_parent().get_node_or_null("CourseManager")
+	reported_conditions.clear()
 
 	workers.clear()
 	next_worker_id = 1
@@ -158,6 +166,8 @@ func create_worker() -> int:
 		"inspection_target": Vector2.ZERO,
 		"observation": "",
 		"observation_cell": Vector2i(-1, -1),
+		"inspection_hole": -1,
+		"inspection_other_hole": -1,
 		"observation_cooldown": 0.0,
 		"movement_path": [],
 		"movement_index": 0,
@@ -499,21 +509,35 @@ func move_worker_to_facility(worker: Dictionary, delta: float) -> bool:
 
 
 func process_idle_wander(worker: Dictionary, delta: float) -> void:
-	# Workers inspect meaningful locations throughout the owned property.
-	# Inspections are informational: never create a job or modify terrain.
+	# Patrols are allowed before construction, but never generate reports.
 	var waiting: float = float(worker.get("wander_wait", 0.0))
 	if waiting > 0.0:
 		worker["wander_wait"] = maxf(0.0, waiting - delta)
 		return
 	if worker.get("movement_path", []).is_empty():
 		if not choose_inspection_destination(worker):
-			worker["wander_wait"] = 4.0
+			worker["wander_wait"] = 5.0
 		return
 	if follow_worker_route(worker, delta):
 		worker["movement_path"] = []
 		worker["movement_index"] = 0
 		complete_worker_inspection(worker)
-		worker["wander_wait"] = 5.0 + float(worker["id"]) * 1.3
+		# A short pause makes inspections feel intentional.
+		worker["wander_wait"] = 8.0 + float(worker["id"]) * 1.7
+
+
+func get_built_hole_routes() -> Array:
+	var result: Array = []
+	if course_manager == null:
+		return result
+	for i in range(course_manager.holes.size()):
+		var hole: Dictionary = course_manager.holes[i]
+		var tee: Vector2 = hole.get("tee", Vector2(-1.0, -1.0))
+		var basket: Vector2 = hole.get("basket", Vector2(-1.0, -1.0))
+		if tee.x < 0.0 or basket.x < 0.0:
+			continue
+		result.append({"number": i + 1, "tee": tee, "basket": basket, "path_points": hole.get("path_points", [])})
+	return result
 
 
 func choose_inspection_destination(worker: Dictionary) -> bool:
@@ -521,84 +545,112 @@ func choose_inspection_destination(worker: Dictionary) -> bool:
 		return false
 	var rng := RandomNumberGenerator.new()
 	rng.seed = int(worker["id"]) * 104729 + int(Time.get_ticks_msec() / 11000)
+	var holes: Array = get_built_hole_routes()
 	var choices: Array = []
-	# The sampled destinations cover the entire property, but favor
-	# places where vegetation or mowing may actually need attention.
-	for i in range(16):
-		var cell := Vector2i(rng.randi_range(2, property_manager.PROPERTY_GRID_WIDTH - 3), rng.randi_range(2, property_manager.PROPERTY_GRID_HEIGHT - 3))
-		var terrain_type: int = int(property_manager.terrain[cell.y][cell.x])
-		if terrain_type == property_manager.WATER:
+	# When there are built holes, inspections stay on playable corridors,
+	# their walking paths, and links between successive holes.
+	for hole_value in holes:
+		var hole: Dictionary = hole_value
+		var tee: Vector2 = hole["tee"]
+		var basket: Vector2 = hole["basket"]
+		var number: int = int(hole["number"])
+		for step in range(7):
+			var t: float = float(step) / 6.0
+			choices.append({"point": tee.lerp(basket, t), "kind": "Hole %d inspection" % number, "hole": number, "other": -1})
+		for path_value in hole["path_points"]:
+			choices.append({"point": path_value, "kind": "Hole %d path inspection" % number, "hole": number, "other": -1})
+	for i in range(holes.size() - 1):
+		var current: Dictionary = holes[i]
+		var following: Dictionary = holes[i + 1]
+		# Inspect the link only when consecutive numbered holes exist.
+		if int(following["number"]) != int(current["number"]) + 1:
 			continue
-		var kind := "Property patrol"
-		var weight := 1
-		if terrain_type == property_manager.TALL_GRASS or terrain_type == property_manager.ROUGH:
-			kind = "Grass inspection"
-			weight = 4
-		elif terrain_type == property_manager.WILD_GRASS:
-			kind = "Brush inspection"
-			weight = 4
-		else:
-			for tree_pos in property_manager.trees:
-				if tree_pos.distance_squared_to(property_manager.cell_to_world_center(cell)) < 110.0 * 110.0:
-					kind = "Woodland inspection"
-					weight = 3
-					break
-		choices.append({"cell": cell, "kind": kind, "weight": weight})
-	# Occasionally visit the facilities between inspections.
-	if rng.randf() < 0.18:
+		for step in range(1, 5):
+			choices.append({"point": current["basket"].lerp(following["tee"], float(step) / 5.0), "kind": "Walking route inspection", "hole": int(current["number"]), "other": int(following["number"])})
+	# Facilities are always valid patrol destinations, including before
+	# the first hole is completed. No reports originate from these visits.
+	if choices.is_empty() or rng.randf() < 0.16:
 		var home: Vector2 = get_maintenance_local_position()
 		if set_worker_route(worker, home):
 			worker["inspection_type"] = "Facility check"
 			worker["inspection_target"] = home
+			worker["inspection_hole"] = -1
+			worker["inspection_other_hole"] = -1
 			return true
-	choices.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["weight"]) > int(b["weight"]))
-	for choice in choices:
-		var destination: Vector2 = property_manager.cell_to_world_center(choice["cell"])
-		if set_worker_route(worker, destination):
+	if choices.is_empty():
+		# Without a playable hole, short local patrols are fine but silent.
+		var home_pos: Vector2 = get_maintenance_local_position()
+		for attempt in range(10):
+			var target: Vector2 = home_pos + Vector2(rng.randf_range(-180.0, 180.0), rng.randf_range(-180.0, 180.0))
+			if set_worker_route(worker, target):
+				worker["inspection_type"] = "Property patrol"
+				worker["inspection_target"] = target
+				worker["inspection_hole"] = -1
+				worker["inspection_other_hole"] = -1
+				return true
+		return false
+	# Randomize the first candidate, then try alternatives if blocked.
+	var first: int = rng.randi_range(0, choices.size() - 1)
+	for offset in range(choices.size()):
+		var choice: Dictionary = choices[(first + offset) % choices.size()]
+		var world_point: Vector2 = choice["point"]
+		var local_point: Vector2 = property_manager.world_to_property_local(world_point)
+		if set_worker_route(worker, local_point):
 			worker["inspection_type"] = str(choice["kind"])
-			worker["inspection_target"] = destination
+			worker["inspection_target"] = local_point
+			worker["inspection_hole"] = int(choice["hole"])
+			worker["inspection_other_hole"] = int(choice["other"])
 			return true
 	return false
 
 
 func complete_worker_inspection(worker: Dictionary) -> void:
-	if property_manager == null or float(worker.get("observation_cooldown", 0.0)) > 0.0:
+	if property_manager == null or get_built_hole_routes().is_empty():
 		return
-	var kind: String = str(worker.get("inspection_type", ""))
+	if float(worker.get("observation_cooldown", 0.0)) > 0.0:
+		return
+	var hole_number: int = int(worker.get("inspection_hole", -1))
+	if hole_number < 1:
+		return
+	var other_hole: int = int(worker.get("inspection_other_hole", -1))
 	var destination: Vector2 = worker.get("inspection_target", Vector2.ZERO)
-	var cell: Vector2i = property_manager.world_to_cell(destination)
+	var world_point: Vector2 = property_manager.property_local_to_world(destination)
+	var cell: Vector2i = property_manager.world_to_cell(world_point)
 	if not property_manager.is_valid_cell(cell.x, cell.y):
 		return
 	var terrain_type: int = int(property_manager.terrain[cell.y][cell.x])
-	var note := ""
-	if kind == "Grass inspection" and (terrain_type == property_manager.TALL_GRASS or terrain_type == property_manager.ROUGH):
-		note = "Tall grass spotted near grid (%d, %d). Consider scheduling mowing." % [cell.x + 1, cell.y + 1]
-	elif kind == "Brush inspection" and terrain_type == property_manager.WILD_GRASS:
-		note = "Dense brush spotted near grid (%d, %d). Consider brush cutting." % [cell.x + 1, cell.y + 1]
-	elif kind == "Woodland inspection":
-		var nearby_trees := 0
-		for tree_pos in property_manager.trees:
-			if tree_pos.distance_squared_to(destination) < 110.0 * 110.0:
-				nearby_trees += 1
-		if nearby_trees >= 3:
-			note = "Dense tree cover near grid (%d, %d). Consider reviewing accessibility." % [cell.x + 1, cell.y + 1]
-	if note.is_empty():
+	var issue: String = ""
+	if terrain_type == property_manager.TALL_GRASS or terrain_type == property_manager.ROUGH:
+		issue = "grass"
+	elif terrain_type == property_manager.WILD_GRASS:
+		issue = "brush"
+	if issue.is_empty():
 		return
-	if str(worker.get("observation", "")) == note:
+	var location: String = "Hole %d" % hole_number
+	if other_hole > 0:
+		location = "Holes %d–%d walking route" % [hole_number, other_hole]
+	var report_key: String = "%d:%d:%s" % [hole_number, other_hole, issue]
+	if reported_conditions.has(report_key):
 		return
+	var note: String = "%s: Tall grass is affecting the playing area. Consider scheduling mowing." % location
+	if issue == "brush":
+		note = "%s: Brush is becoming overgrown. Consider scheduling clearing." % location
 	worker["observation"] = note
 	worker["observation_cell"] = cell
 	worker["observation_cooldown"] = 75.0
+	reported_conditions[report_key] = true
 	workers_changed.emit()
 
 
 func get_worker_observations() -> Array:
 	var reports: Array = []
+	if get_built_hole_routes().is_empty():
+		return reports
 	for worker_value in workers:
 		var worker: Dictionary = worker_value
 		var note: String = str(worker.get("observation", ""))
 		if not note.is_empty():
-			reports.append({"worker_id": int(worker["id"]), "text": note, "cell": worker.get("observation_cell", Vector2i(-1, -1))})
+			reports.append({"worker_id": int(worker["id"]), "text": note, "hole": int(worker.get("inspection_hole", -1))})
 	return reports
 
 
@@ -1875,10 +1927,13 @@ func move_worker_to_position(
 		direction
 	)
 
-	var movement_distance: float = (
-		WORKER_TRAVEL_SPEED
-		* delta
-	)
+	var travel_speed: float = WORKER_TRAVEL_SPEED
+	var phase: String = str(worker.get("state", WORKER_IDLE))
+	if phase == WORKER_IDLE:
+		travel_speed = WORKER_INSPECTION_SPEED
+	elif phase == WORKER_FETCHING or phase == WORKER_RETURNING:
+		travel_speed = WORKER_EQUIPMENT_SPEED
+	var movement_distance: float = travel_speed * delta
 
 	if movement_distance >= distance:
 
