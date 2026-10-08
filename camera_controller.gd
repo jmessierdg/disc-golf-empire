@@ -35,6 +35,31 @@ var last_pinch_distance: float = 0.0
 
 var camera_input_enabled: bool = true
 
+var follow_worker_id: int = -1
+var follow_job_manager = null
+
+func follow_worker(worker_id: int, job_ref) -> void:
+	follow_worker_id = worker_id
+	follow_job_manager = job_ref
+
+func stop_following() -> void:
+	follow_worker_id = -1
+	follow_job_manager = null
+
+func _process(_delta: float) -> void:
+	if follow_worker_id < 0 or follow_job_manager == null or property_manager == null:
+		return
+	for worker_value in follow_job_manager.get_all_workers():
+		var worker: Dictionary = worker_value
+		if int(worker.get("id", -1)) == follow_worker_id:
+			var local_pos: Vector2 = worker.get("position", Vector2(-1, -1))
+			if local_pos.x >= 0.0:
+				position = property_manager.property_local_to_world(local_pos)
+				clamp_camera()
+			return
+	stop_following()
+
+
 
 # ==================================================
 # SETUP
@@ -145,6 +170,9 @@ func handle_drag(
 	# --------------------------------------------------
 
 	if touches.size() == 1:
+
+		if relative_motion.length_squared() > 4.0:
+			stop_following()
 
 		position -= (
 			relative_motion
