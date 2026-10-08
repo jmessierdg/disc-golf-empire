@@ -1136,7 +1136,16 @@ func get_worker_view_info() -> Dictionary:
 		if equipment.is_empty():
 			equipment = "None"
 		var following: bool = camera_controller.follow_worker_id == worker_id
-		return {"type": VIEW_WORKER, "title": "EMPLOYEE #" + str(worker_id), "subtitle": activity, "detail": "Current activity: " + activity + "\nAssigned job: " + str(worker.get("job_id", -1)) + "\nEquipment: " + equipment, "action_text": "STOP FOLLOWING" if following else "FOLLOW WORKER", "action_enabled": true, "destructive": false}
+		var assigned_job: int = int(worker.get("job_id", -1))
+		var job_text: String = "None" if assigned_job < 0 else "#" + str(assigned_job)
+		var destination: Vector2 = worker.get("inspection_target", Vector2.ZERO)
+		var cell: Vector2i = property_manager.world_to_cell(destination)
+		var location_text: String = "Grid (%d, %d)" % [cell.x + 1, cell.y + 1]
+		var observation: String = str(worker.get("observation", ""))
+		if observation.is_empty():
+			observation = "No maintenance concerns reported yet."
+		var detail_text: String = "Activity: " + activity + "\nDestination: " + location_text + "\nAssigned job: " + job_text + "\nEquipment: " + equipment + "\n\nLATEST OBSERVATION\n" + observation + "\n\nReports are advisory. All work requires player approval."
+		return {"type": VIEW_WORKER, "title": "EMPLOYEE #" + str(worker_id), "subtitle": activity, "detail": detail_text, "action_text": "STOP FOLLOWING" if following else "FOLLOW WORKER", "action_enabled": true, "destructive": false}
 	return {}
 
 
