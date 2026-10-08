@@ -262,7 +262,7 @@ func _process(
 		course_renderer != null
 		and workers.size() > 0
 	):
-		course_renderer.refresh()
+		course_renderer.refresh_dynamic()
 
 
 # ==================================================
@@ -2391,6 +2391,8 @@ func process_cell_work(
 		job_type,
 		target_cell
 	)
+	if course_renderer != null:
+		course_renderer.refresh_world()
 
 	var completed_cells: int = int(
 		job.get(
