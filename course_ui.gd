@@ -45,6 +45,12 @@ var empire_sidebar_collapsed := false
 var empire_sidebar_buttons: Dictionary = {}
 var empire_sidebar_hints: Dictionary = {}
 var empire_sidebar_last_tool := ""
+var empire_sidebar_radio_title: Button
+var empire_sidebar_radio_play: Button
+var empire_sidebar_drag_handle: Button
+var empire_sidebar_top_offset := 155.0
+var empire_drag_active := false
+var empire_drag_last_y := 0.0
 
 
 
@@ -257,11 +263,13 @@ func apply_ui_scale() -> void:
 		pending_panel.offset_left = -333.5
 		pending_panel.offset_right = 333.5
 	if inspector_panel != null:
-		inspector_panel.offset_right = 743.0
-		inspector_panel.offset_top = -680.0
+		inspector_panel.offset_right = 510.0
+		inspector_panel.offset_top = -510.0
+		inspector_panel.offset_bottom = -210.0
 	if crew_panel != null:
 		crew_panel.offset_left = -580.0
-		crew_panel.offset_bottom = 570.0
+		crew_panel.offset_top = 150.0
+		crew_panel.offset_bottom = 610.0
 
 func scale_interface_branch(widget: Control) -> void:
 	if widget.has_theme_font_size_override("font_size"):
@@ -2878,6 +2886,12 @@ func create_empire_sidebar() -> void:
 	heading.add_theme_constant_override("separation", 4)
 	outer.add_child(heading)
 
+	# Long-press and drag this grip to reposition the whole toolbar vertically.
+	empire_sidebar_drag_handle = create_ui_button("↕", Vector2(72, 76))
+	empire_sidebar_drag_handle.tooltip_text = "Hold and drag up or down to move toolbar"
+	empire_sidebar_drag_handle.gui_input.connect(_on_empire_drag_input)
+	heading.add_child(empire_sidebar_drag_handle)
+
 	empire_sidebar_toggle = create_ui_button("≡  TOOLS", Vector2(0, 76))
 	empire_sidebar_toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	empire_sidebar_toggle.pressed.connect(toggle_empire_sidebar)
@@ -2919,6 +2933,29 @@ func create_empire_sidebar() -> void:
 	forward.pressed.connect(_on_next_hole_pressed)
 	navigation.add_child(forward)
 	empire_sidebar_buttons["next"] = forward
+
+	# Radio stays at the bottom of the command bar, outside its scroll region.
+	var radio_strip := VBoxContainer.new()
+	radio_strip.add_theme_constant_override("separation", 3)
+	outer.add_child(radio_strip)
+	empire_sidebar_radio_title = create_ui_button("♫  RADIO  ▴", Vector2(0, 62))
+	empire_sidebar_radio_title.pressed.connect(_on_empire_radio_open)
+	radio_strip.add_child(empire_sidebar_radio_title)
+	var radio_buttons := HBoxContainer.new()
+	radio_buttons.add_theme_constant_override("separation", 4)
+	radio_strip.add_child(radio_buttons)
+	var prev_radio := create_ui_button("◀", Vector2(0, 62))
+	prev_radio.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	prev_radio.pressed.connect(_on_empire_radio_previous)
+	radio_buttons.add_child(prev_radio)
+	empire_sidebar_radio_play = create_ui_button("Ⅱ", Vector2(0, 62))
+	empire_sidebar_radio_play.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	empire_sidebar_radio_play.pressed.connect(_on_empire_radio_play)
+	radio_buttons.add_child(empire_sidebar_radio_play)
+	var next_radio := create_ui_button("▶", Vector2(0, 62))
+	next_radio.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	next_radio.pressed.connect(_on_empire_radio_next)
+	radio_buttons.add_child(next_radio)
 	refresh_empire_sidebar()
 
 func add_empire_sidebar_caption(caption_text: String) -> void:
@@ -2977,14 +3014,23 @@ func apply_empire_sidebar_layout() -> void:
 	empire_sidebar.anchor_bottom = 1.0
 	empire_sidebar.offset_left = 12.0
 	empire_sidebar.offset_right = 12.0 + width
-	empire_sidebar.offset_top = 155.0
-	empire_sidebar.offset_bottom = -16.0
+	var screen_height: float = get_viewport().get_visible_rect().size.y
+	var bar_height: float = maxf(320.0, screen_height - 171.0)
+	empire_sidebar_top_offset = clampf(empire_sidebar_top_offset, 115.0, maxf(115.0, screen_height - 250.0))
+	empire_sidebar.offset_top = empire_sidebar_top_offset
+	empire_sidebar.offset_bottom = minf(screen_height - 12.0, empire_sidebar_top_offset + bar_height) - screen_height
 	empire_sidebar.custom_minimum_size = Vector2.ZERO
 	empire_sidebar_scroll.visible = not empire_sidebar_collapsed
 	empire_sidebar_toggle.text = "☰" if empire_sidebar_collapsed else "≡  TOOLS  ‹"
+	if empire_sidebar_drag_handle != null:
+		empire_sidebar_drag_handle.text = "↕"
 	if inspector_panel != null:
 		inspector_panel.offset_left = 110.0 if empire_sidebar_collapsed else width + 28.0
-		inspector_panel.offset_right = inspector_panel.offset_left + 620.0
+		# About 65% of the crew panel footprint, as requested.
+		var crew_width: float = 580.0
+		if crew_panel != null:
+			crew_width = crew_panel.offset_right - crew_panel.offset_left
+		inspector_panel.offset_right = inspector_panel.offset_left + crew_width * 0.68
 
 func refresh_empire_sidebar() -> void:
 	if empire_sidebar == null or course_builder == null:
@@ -3004,9 +3050,64 @@ func refresh_empire_sidebar() -> void:
 				hint.text = get_empire_tool_hint(key)
 	if tooltip_panel != null:
 		tooltip_panel.hide()
+	var radio_node = get_parent().get_node_or_null("RadioManager")
+	if radio_node != null and empire_sidebar_radio_play != null:
+		empire_sidebar_radio_play.text = "▶" if radio_node.player != null and radio_node.player.stream_paused else "Ⅱ"
 	var previous: Button = empire_sidebar_buttons.get("previous")
 	var following: Button = empire_sidebar_buttons.get("next")
 	if previous != null and course_manager != null:
 		previous.disabled = course_manager.selected_hole <= 0
 	if following != null and course_manager != null:
 		following.disabled = course_manager.selected_hole >= course_manager.TOTAL_HOLES - 1
+
+
+# ==================================================
+# UPDATE 13: DRAGGABLE SIDEBAR AND DOCKED RADIO
+# ==================================================
+
+func _on_empire_drag_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch:
+		if event.pressed:
+			empire_drag_active = true
+			empire_drag_last_y = event.position.y
+		else:
+			empire_drag_active = false
+		get_viewport().set_input_as_handled()
+	elif event is InputEventScreenDrag and empire_drag_active:
+		empire_sidebar_top_offset += event.relative.y
+		empire_drag_last_y = event.position.y
+		apply_empire_sidebar_layout()
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		empire_drag_active = event.pressed
+		empire_drag_last_y = event.position.y
+		get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and empire_drag_active:
+		empire_sidebar_top_offset += event.relative.y
+		empire_drag_last_y = event.position.y
+		apply_empire_sidebar_layout()
+		get_viewport().set_input_as_handled()
+
+func _get_empire_radio():
+	return get_parent().get_node_or_null("RadioManager")
+
+func _on_empire_radio_open() -> void:
+	var radio = _get_empire_radio()
+	if radio != null:
+		radio.toggle_expanded()
+
+func _on_empire_radio_previous() -> void:
+	var radio = _get_empire_radio()
+	if radio != null:
+		radio.previous_track()
+
+func _on_empire_radio_play() -> void:
+	var radio = _get_empire_radio()
+	if radio != null:
+		radio.toggle_pause()
+		refresh_empire_sidebar()
+
+func _on_empire_radio_next() -> void:
+	var radio = _get_empire_radio()
+	if radio != null:
+		radio.next_track()
