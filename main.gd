@@ -273,6 +273,8 @@ func create_components() -> void:
 	# Walkway construction is independent from flight-path editing.
 	path_manager = PATH_MANAGER_SCRIPT.new()
 	path_manager.name = "PathManager"
+	# Ground is z=0; paths z=1; vegetation z=2; holes z=3; actors z=4.
+	path_manager.z_index = 1
 	add_child(path_manager)
 	path_manager.setup(property_manager, economy_manager, job_manager, course_manager)
 	course_ui.set_walkway_manager(path_manager)
