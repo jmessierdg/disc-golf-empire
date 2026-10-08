@@ -32,6 +32,7 @@ enum Tool {
 
 const VIEW_NONE := ""
 const VIEW_BUILDING := "building"
+const VIEW_WORKER := "worker"
 const VIEW_TREE := "tree"
 const VIEW_TEE := "tee"
 const VIEW_BASKET := "basket"
@@ -955,6 +956,17 @@ func find_path_insert_index(
 func handle_view_press(
 	world_position: Vector2
 ) -> bool:
+	# Worker hit-testing precedes buildings and vegetation.
+	if job_manager != null:
+		for worker_value in job_manager.get_all_workers():
+			var worker: Dictionary = worker_value
+			var local_pos: Vector2 = worker.get("position", Vector2(-1, -1))
+			if local_pos.x < 0.0:
+				continue
+			var world_pos: Vector2 = property_manager.property_local_to_world(local_pos)
+			if world_pos.distance_to(world_position) <= 25.0:
+				set_viewed_object({"type": VIEW_WORKER, "worker_id": int(worker.get("id", -1))})
+				return false
 	for index in range(property_manager.buildings.size() - 1, -1, -1):
 		var item: Dictionary = property_manager.buildings[index]
 		var kind: String = str(item.get("type", ""))
@@ -1083,6 +1095,8 @@ func get_viewed_object_info() -> Dictionary:
 	)
 
 	match object_type:
+		VIEW_WORKER:
+			return get_worker_view_info()
 		VIEW_BUILDING:
 			var index: int = int(viewed_object.get("index", -1))
 			if index < 0 or index >= property_manager.buildings.size():
@@ -1106,6 +1120,23 @@ func get_viewed_object_info() -> Dictionary:
 		VIEW_PATH_POINT:
 			return get_path_point_view_info()
 
+	return {}
+
+
+func get_worker_view_info() -> Dictionary:
+	if job_manager == null:
+		return {}
+	var worker_id: int = int(viewed_object.get("worker_id", -1))
+	for worker_value in job_manager.get_all_workers():
+		var worker: Dictionary = worker_value
+		if int(worker.get("id", -1)) != worker_id:
+			continue
+		var activity: String = job_manager.get_worker_status_text(worker_id)
+		var equipment: String = str(worker.get("equipment_type", ""))
+		if equipment.is_empty():
+			equipment = "None"
+		var following: bool = camera_controller.follow_worker_id == worker_id
+		return {"type": VIEW_WORKER, "title": "EMPLOYEE #" + str(worker_id), "subtitle": activity, "detail": "Current activity: " + activity + "\nAssigned job: " + str(worker.get("job_id", -1)) + "\nEquipment: " + equipment, "action_text": "STOP FOLLOWING" if following else "FOLLOW WORKER", "action_enabled": true, "destructive": false}
 	return {}
 
 
@@ -1249,6 +1280,14 @@ func perform_view_action() -> bool:
 	)
 
 	match object_type:
+		VIEW_WORKER:
+			var worker_id: int = int(viewed_object.get("worker_id", -1))
+			if camera_controller.follow_worker_id == worker_id:
+				camera_controller.stop_following()
+			else:
+				camera_controller.follow_worker(worker_id, job_manager)
+			viewed_object_changed.emit(get_viewed_object_info())
+			return true
 		VIEW_TREE:
 			return remove_viewed_tree()
 
