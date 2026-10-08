@@ -326,14 +326,33 @@ func _draw() -> void:
 
 func draw_starter_facilities() -> void:
 	var entry: Array = property_manager.property_driveway_points
-	if entry.size() >= 4:
-		var gate: Vector2 = entry[3]
-		var lot: Vector2 = gate + Vector2(65.0, 60.0)
-		var shop: Vector2 = gate + Vector2(-95.0, 255.0)
-		var yard: Vector2 = gate + Vector2(25.0, 270.0)
-		draw_line(gate, lot, Color(0.52, 0.47, 0.38), 27.0, true)
-		draw_line(gate + Vector2(0.0, 55.0), shop, Color(0.52, 0.47, 0.38), 23.0, true)
-		draw_line(shop, yard, Color(0.52, 0.47, 0.38), 21.0, true)
+	var parking: Dictionary = property_manager.get_starter_facility("starter_parking")
+	var shed: Dictionary = property_manager.get_starter_facility("starter_shed")
+	var yard: Dictionary = property_manager.get_starter_facility("starter_yard")
+	if entry.size() >= 4 and not parking.is_empty():
+		# Public-road branch along the east property edge, connected to the
+		# existing northern public road before entering the owned property.
+		var road_x: float = entry[0].x
+		var northern_road_y: float = property_manager.get_road_reference_y()
+		draw_line(Vector2(road_x, northern_road_y), entry[0], Color(0.37, 0.35, 0.31), 54.0, true)
+		draw_line(Vector2(road_x, northern_road_y), entry[0], Color(0.54, 0.52, 0.46), 43.0, true)
+		var lot_center: Vector2 = parking["position"]
+		# Entrance driveway terminates at visitor parking.
+		for i in range(1, entry.size()):
+			draw_line(entry[i - 1], entry[i], Color(0.40, 0.36, 0.30), 30.0, true)
+			draw_line(entry[i - 1], entry[i], Color(0.68, 0.62, 0.50), 25.0, true)
+		draw_line(entry[3], lot_center, Color(0.68, 0.62, 0.50), 25.0, true)
+	if not parking.is_empty() and not shed.is_empty() and not yard.is_empty():
+		# Narrow dirt maintenance track, visually separate from the parking.
+		var lot: Vector2 = parking["position"]
+		var shop: Vector2 = shed["position"]
+		var storage: Vector2 = yard["position"]
+		var track_start: Vector2 = lot + Vector2(-30.0, 20.0)
+		var track_turn: Vector2 = Vector2(shop.x + 20.0, track_start.y + 35.0)
+		draw_line(track_start, track_turn, Color(0.43, 0.34, 0.23), 16.0, true)
+		draw_line(track_turn, storage, Color(0.43, 0.34, 0.23), 16.0, true)
+		draw_line(track_start, track_turn, Color(0.58, 0.46, 0.32), 11.0, true)
+		draw_line(track_turn, storage, Color(0.58, 0.46, 0.32), 11.0, true)
 	for value in property_manager.buildings:
 		var item: Dictionary = value
 		var kind: String = str(item.get("type", ""))
@@ -343,26 +362,26 @@ func draw_starter_facilities() -> void:
 		var size: Vector2 = item["size"]
 		var area: Rect2 = Rect2(center - size * 0.5, size)
 		if kind == "starter_parking":
-			draw_rect(area, Color(0.47, 0.45, 0.40), true)
-			draw_rect(area, Color(0.68, 0.63, 0.52), false, 2.0)
+			draw_rect(area, Color(0.48, 0.44, 0.38), true)
+			draw_rect(area, Color(0.72, 0.65, 0.53), false, 2.0)
 			for i in range(5):
-				var y: float = area.position.y + 9.0 + float(i) * (size.y - 18.0) / 5.0
-				draw_line(Vector2(area.position.x + 6.0, y), Vector2(center.x - 5.0, y), Color(0.86, 0.82, 0.71), 1.8)
+				var x: float = area.position.x + 12.0 + float(i) * (size.x - 24.0) / 5.0
+				draw_line(Vector2(x, area.position.y + 6.0), Vector2(x, area.position.y + size.y * 0.38), Color(0.87, 0.82, 0.71), 1.8)
 			continue
 		if kind == "starter_yard":
-			draw_rect(area, Color(0.52, 0.46, 0.36), true)
-			draw_rect(area, Color(0.76, 0.67, 0.45), false, 2.0)
+			draw_rect(area, Color(0.52, 0.43, 0.30), true)
+			draw_rect(area, Color(0.74, 0.65, 0.43), false, 2.5)
 			for i in range(3):
-				var x: float = area.position.x + 10.0 + i * 29.0
-				draw_rect(Rect2(Vector2(x, center.y - 8.0), Vector2(17.0, 13.0)), Color(0.25, 0.42, 0.25), true)
+				var x: float = area.position.x + 8.0 + float(i) * 23.0
+				draw_rect(Rect2(Vector2(x, center.y - 7.0), Vector2(16.0, 12.0)), Color(0.23, 0.43, 0.26), true)
 			continue
-		var roof: Color = Color(0.21, 0.36, 0.42) if kind == "starter_office" else Color(0.35, 0.39, 0.34)
+		var roof: Color = Color(0.22, 0.37, 0.43) if kind == "starter_office" else Color(0.36, 0.40, 0.33)
 		draw_rect(Rect2(area.position + Vector2(4.0, 5.0), size), Color(0.0, 0.0, 0.0, 0.22), true)
-		draw_rect(area, Color(0.78, 0.73, 0.61), true)
+		draw_rect(area, Color(0.77, 0.72, 0.61), true)
 		draw_rect(area.grow(-4.0), roof, true)
 		draw_line(Vector2(center.x, area.position.y + 4.0), Vector2(center.x, area.end.y - 4.0), Color(0.70, 0.72, 0.67), 2.0)
 		draw_rect(area, Color(0.19, 0.23, 0.20), false, 2.0)
-		var caption: String = "OFFICE" if kind == "starter_office" else "MAINTENANCE"
+		var caption: String = "OFFICE" if kind == "starter_office" else "SHED"
 		draw_string(ThemeDB.fallback_font, Vector2(area.position.x, area.position.y - 7.0), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color.WHITE)
 
 
@@ -2152,7 +2171,7 @@ func draw_all_active_workers() -> void:
 		return
 
 	var active_workers: Array = (
-		job_manager.get_active_workers()
+		job_manager.get_all_workers()
 	)
 
 	for worker_value in active_workers:
@@ -2200,6 +2219,13 @@ func draw_worker(
 		-direction.y,
 		direction.x
 	)
+
+	var phase: String = str(worker.get("state", "idle"))
+	if phase != "working":
+		draw_circle(world_position + Vector2(2.0, 3.0), 9.0, Color(0.0, 0.0, 0.0, 0.20))
+		draw_circle(world_position, 7.0, Color(0.24, 0.44, 0.83))
+		draw_circle(world_position - direction * 5.0, 4.0, Color(0.88, 0.71, 0.53))
+		return
 
 	var job_id: int = int(
 		worker.get(
