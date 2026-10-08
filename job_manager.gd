@@ -80,6 +80,11 @@ var property_manager
 var course_renderer
 var economy_manager
 var course_manager = null
+var walkway_manager = null
+
+func set_walkway_manager(manager_ref) -> void:
+	walkway_manager = manager_ref
+
 var reported_conditions: Dictionary = {}
 
 
@@ -1995,6 +2000,9 @@ func find_navigation_path(
 	):
 		return empty_path
 
+	var walkway_cells: Dictionary = {}
+	if walkway_manager != null:
+		walkway_cells = walkway_manager.get_walkway_cells()
 	var blocked_cells: Dictionary = (
 		build_navigation_blocked_cells(
 			start_cell,
@@ -2020,7 +2028,7 @@ func find_navigation_path(
 		start_cell: navigation_heuristic(
 			start_cell,
 			target_cell
-		)
+		) * 0.35
 	}
 
 	while not open_cells.is_empty():
@@ -2078,7 +2086,7 @@ func find_navigation_path(
 						INF
 					)
 				)
-				+ 1.0
+				+ (0.35 if walkway_cells.has(neighbor) else 1.0)
 			)
 
 			var known_g: float = float(
@@ -2107,7 +2115,7 @@ func find_navigation_path(
 				navigation_heuristic(
 					neighbor,
 					target_cell
-				)
+				) * 0.35
 			)
 
 			if not open_lookup.has(
