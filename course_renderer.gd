@@ -11,6 +11,16 @@ var property_manager
 var course_manager
 var job_manager
 
+# Separate CanvasItems retain their drawing commands until invalidated.
+# 0 = terrain, 1 = course, 2 = moving characters/jobs, 3 = selection UI.
+var render_layer: int = 0
+var course_layer: CourseRenderer
+var actors_layer: CourseRenderer
+var overlay_layer: CourseRenderer
+var world_dirty: bool = false
+var world_refresh_count: int = 0
+var dynamic_refresh_count: int = 0
+
 
 # ==================================================
 # PERFORMANCE
@@ -150,10 +160,9 @@ func setup(
 
 	position = Vector2.ZERO
 
-	set_process(
-		true
-	)
-
+	set_process(true)
+	if render_layer == 0:
+		_create_render_layers()
 	refresh_immediately()
 
 
@@ -162,7 +171,10 @@ func set_job_manager(
 ) -> void:
 
 	job_manager = job_ref
-
+	if render_layer == 0:
+		course_layer.job_manager = job_ref
+		actors_layer.job_manager = job_ref
+		overlay_layer.job_manager = job_ref
 	refresh_immediately()
 
 
@@ -188,17 +200,98 @@ func _process(
 	queue_redraw()
 
 
-func refresh() -> void:
+# Keep the expensive static canvas untouched for ordinary tool interactions.
+func _create_render_layers() -> void:
+	course_layer = CourseRenderer.new()
+	course_layer.name = "CourseCanvas"
+	course_layer.render_layer = 1
+	course_layer.property_manager = property_manager
+	course_layer.course_manager = course_manager
+	add_child(course_layer)
 
-	redraw_requested = true
+	actors_layer = CourseRenderer.new()
+	actors_layer.name = "ActorsCanvas"
+	actors_layer.render_layer = 2
+	actors_layer.property_manager = property_manager
+	actors_layer.course_manager = course_manager
+	add_child(actors_layer)
+
+	overlay_layer = CourseRenderer.new()
+	overlay_layer.name = "ToolOverlayCanvas"
+	overlay_layer.render_layer = 3
+	overlay_layer.property_manager = property_manager
+	overlay_layer.course_manager = course_manager
+	add_child(overlay_layer)
+
+
+func refresh() -> void:
+	# Existing builder calls update course graphics and overlays, not terrain.
+	if render_layer == 0:
+		if course_layer != null:
+			course_layer.redraw_requested = true
+		if overlay_layer != null:
+			_sync_overlay()
+			overlay_layer.redraw_requested = true
+	else:
+		redraw_requested = true
 
 
 func refresh_immediately() -> void:
-
-	redraw_requested = false
-	redraw_accumulator = 0.0
-
+	if render_layer == 0:
+		if course_layer != null:
+			course_layer.queue_redraw()
+		if actors_layer != null:
+			actors_layer.queue_redraw()
+		if overlay_layer != null:
+			_sync_overlay()
+			overlay_layer.queue_redraw()
 	queue_redraw()
+
+
+func refresh_dynamic() -> void:
+	# Moving workers do not invalidate terrain or course drawing.
+	if render_layer == 0 and actors_layer != null:
+		actors_layer.redraw_requested = true
+		dynamic_refresh_count += 1
+	elif render_layer == 2:
+		redraw_requested = true
+
+
+func refresh_world() -> void:
+	# Terrain changes (mowing, brush, tree removal) explicitly invalidate
+	# the static canvas. Godot retains draw commands between redraws.
+	if render_layer == 0:
+		world_refresh_count += 1
+		redraw_requested = true
+		refresh()
+	else:
+		redraw_requested = true
+
+
+func _sync_overlay() -> void:
+	if overlay_layer == null:
+		return
+	overlay_layer.path_edit_mode = path_edit_mode
+	overlay_layer.viewed_object = viewed_object
+	overlay_layer.landscape_preview_visible = landscape_preview_visible
+	overlay_layer.landscape_preview_position = landscape_preview_position
+	overlay_layer.landscape_preview_radius = landscape_preview_radius
+	overlay_layer.landscape_selected_cells = landscape_selected_cells
+	overlay_layer.landscape_selected_lookup = landscape_selected_lookup
+
+
+func refresh_overlay() -> void:
+	if render_layer == 0 and overlay_layer != null:
+		_sync_overlay()
+		overlay_layer.redraw_requested = true
+
+
+func get_render_diagnostics() -> Dictionary:
+	return {
+		"world_invalidations": world_refresh_count,
+		"actor_refresh_requests": dynamic_refresh_count,
+		"fps": Engine.get_frames_per_second()
+	}
 
 
 func set_path_edit_mode(
@@ -207,7 +300,7 @@ func set_path_edit_mode(
 
 	path_edit_mode = edit_active
 
-	refresh_immediately()
+	refresh_overlay()
 
 
 func set_viewed_object(
@@ -218,14 +311,14 @@ func set_viewed_object(
 		true
 	)
 
-	refresh_immediately()
+	refresh_overlay()
 
 
 func clear_viewed_object() -> void:
 
 	viewed_object.clear()
 
-	refresh_immediately()
+	refresh_overlay()
 
 
 # ==================================================
@@ -241,7 +334,7 @@ func set_landscape_cursor(
 	landscape_preview_position = world_position
 	landscape_preview_radius = radius
 
-	refresh()
+	refresh_overlay()
 
 
 func add_landscape_selection_cell(
@@ -261,7 +354,7 @@ func add_landscape_selection_cell(
 		cell
 	)
 
-	refresh()
+	refresh_overlay()
 
 
 func clear_landscape_selection() -> void:
@@ -272,7 +365,7 @@ func clear_landscape_selection() -> void:
 	landscape_selected_cells.clear()
 	landscape_selected_lookup.clear()
 
-	refresh_immediately()
+	refresh_overlay()
 
 
 # ==================================================
@@ -280,41 +373,35 @@ func clear_landscape_selection() -> void:
 # ==================================================
 
 func _draw() -> void:
-
-	if property_manager == null:
+	if property_manager == null or course_manager == null:
 		return
 
-	if course_manager == null:
-		return
-
-	draw_world_background()
-	draw_neighbor_fields()
-
-	draw_public_road()
-	draw_walking_trail()
-
-	draw_world_trees()
-
-	draw_owned_property()
-	draw_property_ground_cover()
-	draw_water()
-
-	draw_property_bushes()
-	draw_property_brush()
-	draw_property_trees()
-	draw_starter_facilities()
-
-	draw_property_boundary()
-
-	draw_all_holes()
-
-	draw_all_queued_work_orders()
-	draw_all_active_work_orders()
-	draw_all_active_workers()
-
-	draw_landscape_preview()
-	draw_view_highlight()
-	draw_selected_worker_highlight()
+	match render_layer:
+		0:
+			# Static draw commands are cached by CanvasItem.
+			draw_world_background()
+			draw_neighbor_fields()
+			draw_public_road()
+			draw_walking_trail()
+			draw_world_trees()
+			draw_owned_property()
+			draw_property_ground_cover()
+			draw_water()
+			draw_property_bushes()
+			draw_property_brush()
+			draw_property_trees()
+			draw_starter_facilities()
+			draw_property_boundary()
+		1:
+			draw_all_holes()
+		2:
+			draw_all_queued_work_orders()
+			draw_all_active_work_orders()
+			draw_all_active_workers()
+			draw_selected_worker_highlight()
+		3:
+			draw_landscape_preview()
+			draw_view_highlight()
 
 
 # ==================================================
