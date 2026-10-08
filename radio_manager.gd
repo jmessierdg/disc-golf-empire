@@ -1,25 +1,28 @@
 # radio_manager.gd
-# Disc Golf Empire Radio - self-contained music player and mobile banner.
+# Disc Golf Empire Radio: persistent compact player and expandable controls.
 extends CanvasLayer
 
 const MUSIC_DIRECTORY := "res://music"
 const SETTINGS_FILE := "user://radio_settings.cfg"
-const BANNER_DURATION := 5.0
+const UI_SCALE := 1.15
 
 var tracks: Array[String] = []
 var current_index: int = -1
 var shuffle_enabled: bool = false
+var loop_enabled: bool = false
 var music_volume: float = 0.65
 var expanded: bool = false
 var player: AudioStreamPlayer
-var banner: PanelContainer
-var banner_label: Label
-var subtitle_label: Label
-var controls: HBoxContainer
-var play_button: Button
+var panel: PanelContainer
+var heading_button: Button
+var track_label: Label
+var details_label: Label
+var compact_play_button: Button
+var expanded_play_button: Button
 var shuffle_button: Button
+var loop_button: Button
 var volume_slider: HSlider
-var banner_timer: Timer
+var extra_controls: VBoxContainer
 var randomizer := RandomNumberGenerator.new()
 
 func _ready() -> void:
@@ -30,12 +33,13 @@ func _ready() -> void:
 	if not tracks.is_empty():
 		play_track(0)
 	else:
-		banner.visible = false
-		print("Disc Golf Empire Radio: Add MP3 or OGG files to res://music/ to enable music.")
+		track_label.text = "No music found"
+		details_label.text = "Add tracks to res://music/"
+	refresh_buttons()
 
 func load_playlist() -> void:
 	tracks.clear()
-	var directory := DirAccess.open(MUSIC_DIRECTORY)
+	var directory: DirAccess = DirAccess.open(MUSIC_DIRECTORY)
 	if directory == null:
 		return
 	directory.list_dir_begin()
@@ -58,142 +62,166 @@ func build_interface() -> void:
 	add_child(player)
 	update_volume()
 
-	banner_timer = Timer.new()
-	banner_timer.one_shot = true
-	banner_timer.wait_time = BANNER_DURATION
-	banner_timer.timeout.connect(_on_banner_timeout)
-	add_child(banner_timer)
+	var overlay := Control.new()
+	overlay.name = "RadioOverlay"
+	overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(overlay)
 
-	var root := Control.new()
-	root.name = "RadioOverlay"
-	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(root)
-
-	banner = PanelContainer.new()
-	banner.name = "NowPlayingBanner"
-	banner.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	banner.anchor_left = 1.0
-	banner.anchor_right = 1.0
-	banner.offset_left = -300.0
-	banner.offset_right = -12.0
-	banner.offset_top = 58.0
-	banner.offset_bottom = 138.0
-	banner.custom_minimum_size = Vector2(288.0, 78.0)
-	banner.mouse_filter = Control.MOUSE_FILTER_STOP
-	root.add_child(banner)
+	# Right edge, around the middle of the screen: clear of the top HUD.
+	panel = PanelContainer.new()
+	panel.name = "PersistentRadio"
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.anchor_top = 0.38
+	panel.anchor_bottom = 0.38
+	panel.offset_left = -385.0
+	panel.offset_right = -16.0
+	panel.offset_top = 0.0
+	panel.offset_bottom = 98.0
+	panel.custom_minimum_size = Vector2(369.0, 98.0)
+	panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	overlay.add_child(panel)
 
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.085, 0.115, 0.14, 0.94)
-	style.border_color = Color(0.34, 0.70, 0.49, 0.85)
-	style.set_border_width_all(1)
-	style.set_corner_radius_all(13)
-	style.content_margin_left = 12
-	style.content_margin_right = 12
-	style.content_margin_top = 8
-	style.content_margin_bottom = 8
-	banner.add_theme_stylebox_override("panel", style)
+	style.bg_color = Color(0.065, 0.09, 0.08, 0.96)
+	style.border_color = Color(0.35, 0.74, 0.49, 0.9)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(16)
+	style.content_margin_left = 14
+	style.content_margin_right = 14
+	style.content_margin_top = 10
+	style.content_margin_bottom = 10
+	panel.add_theme_stylebox_override("panel", style)
 
 	var stack := VBoxContainer.new()
-	stack.add_theme_constant_override("separation", 3)
-	banner.add_child(stack)
+	stack.add_theme_constant_override("separation", 5)
+	panel.add_child(stack)
 
-	var heading := Button.new()
-	heading.text = "♪  DISC GOLF EMPIRE RADIO   ▾"
-	heading.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	heading.flat = true
-	heading.add_theme_font_size_override("font_size", 12)
-	heading.pressed.connect(toggle_expanded)
-	stack.add_child(heading)
+	heading_button = Button.new()
+	heading_button.text = "♫  DISC GOLF EMPIRE RADIO   ▾"
+	heading_button.flat = true
+	heading_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	heading_button.add_theme_font_size_override("font_size", 14)
+	heading_button.pressed.connect(toggle_expanded)
+	stack.add_child(heading_button)
 
-	banner_label = Label.new()
-	banner_label.text = "Now Playing"
-	banner_label.add_theme_font_size_override("font_size", 17)
-	banner_label.add_theme_color_override("font_color", Color(0.94, 0.98, 0.92))
-	stack.add_child(banner_label)
+	var main_row := HBoxContainer.new()
+	main_row.add_theme_constant_override("separation", 10)
+	stack.add_child(main_row)
 
-	subtitle_label = Label.new()
-	subtitle_label.text = "Original Game Soundtrack"
-	subtitle_label.add_theme_font_size_override("font_size", 11)
-	subtitle_label.add_theme_color_override("font_color", Color(0.65, 0.78, 0.70))
-	stack.add_child(subtitle_label)
+	var track_column := VBoxContainer.new()
+	track_column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	main_row.add_child(track_column)
 
-	controls = HBoxContainer.new()
-	controls.visible = false
-	controls.add_theme_constant_override("separation", 5)
-	stack.add_child(controls)
+	track_label = Label.new()
+	track_label.text = "Disc Golf Empire Radio"
+	track_label.clip_text = true
+	track_label.add_theme_font_size_override("font_size", 19)
+	track_label.add_theme_color_override("font_color", Color(0.95, 0.98, 0.92))
+	track_column.add_child(track_label)
 
-	var previous_button := Button.new()
-	previous_button.text = "|◀"
-	previous_button.pressed.connect(previous_track)
-	controls.add_child(previous_button)
+	details_label = Label.new()
+	details_label.text = "Original Game Soundtrack"
+	details_label.clip_text = true
+	details_label.add_theme_font_size_override("font_size", 12)
+	details_label.add_theme_color_override("font_color", Color(0.68, 0.81, 0.72))
+	track_column.add_child(details_label)
 
-	play_button = Button.new()
-	play_button.text = "Ⅱ"
-	play_button.pressed.connect(toggle_pause)
-	controls.add_child(play_button)
+	var mini_controls := HBoxContainer.new()
+	mini_controls.add_theme_constant_override("separation", 3)
+	main_row.add_child(mini_controls)
+	add_transport_button(mini_controls, "◀◀", previous_track)
+	compact_play_button = add_transport_button(mini_controls, "Ⅱ", toggle_pause)
+	add_transport_button(mini_controls, "▶▶", next_track)
 
-	var next_button := Button.new()
-	next_button.text = "▶|"
-	next_button.pressed.connect(next_track)
-	controls.add_child(next_button)
+	extra_controls = VBoxContainer.new()
+	extra_controls.visible = false
+	extra_controls.add_theme_constant_override("separation", 9)
+	stack.add_child(extra_controls)
 
-	shuffle_button = Button.new()
-	shuffle_button.text = "Mix On" if shuffle_enabled else "Mix Off"
-	shuffle_button.pressed.connect(toggle_shuffle)
-	controls.add_child(shuffle_button)
+	var separator := HSeparator.new()
+	extra_controls.add_child(separator)
 
+	var label := Label.new()
+	label.text = "PLAYBACK CONTROLS"
+	label.add_theme_font_size_override("font_size", 13)
+	label.add_theme_color_override("font_color", Color(0.66, 0.80, 0.70))
+	extra_controls.add_child(label)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	extra_controls.add_child(row)
+	add_transport_button(row, "◀ Previous", previous_track)
+	expanded_play_button = add_transport_button(row, "Ⅱ Pause", toggle_pause)
+	add_transport_button(row, "Next ▶", next_track)
+
+	var modes := HBoxContainer.new()
+	modes.add_theme_constant_override("separation", 8)
+	extra_controls.add_child(modes)
+	shuffle_button = add_transport_button(modes, "Shuffle: Off", toggle_shuffle)
+	loop_button = add_transport_button(modes, "Repeat: Off", toggle_loop)
+
+	var volume_row := HBoxContainer.new()
+	volume_row.add_theme_constant_override("separation", 10)
+	extra_controls.add_child(volume_row)
+	var volume_text := Label.new()
+	volume_text.text = "Music volume"
+	volume_text.add_theme_font_size_override("font_size", 14)
+	volume_row.add_child(volume_text)
 	volume_slider = HSlider.new()
-	volume_slider.custom_minimum_size = Vector2(70.0, 24.0)
+	volume_slider.custom_minimum_size = Vector2(180.0, 32.0)
+	volume_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	volume_slider.min_value = 0.0
 	volume_slider.max_value = 1.0
 	volume_slider.step = 0.05
 	volume_slider.value = music_volume
 	volume_slider.value_changed.connect(set_music_volume)
-	controls.add_child(volume_slider)
+	volume_row.add_child(volume_slider)
 
-	# Persistent mini-radio tab lets the player reopen the controls at any time.
-	var tab := Button.new()
-	tab.name = "RadioTab"
-	tab.text = "♫"
-	tab.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	tab.anchor_left = 1.0
-	tab.anchor_right = 1.0
-	tab.offset_left = -51.0
-	tab.offset_right = -12.0
-	tab.offset_top = 12.0
-	tab.offset_bottom = 50.0
-	tab.pressed.connect(toggle_radio_visibility)
-	root.add_child(tab)
+func add_transport_button(parent: HBoxContainer, title: String, callback: Callable) -> Button:
+	var button := Button.new()
+	button.text = title
+	button.custom_minimum_size = Vector2(42.0, 39.0)
+	button.add_theme_font_size_override("font_size", 14)
+	button.pressed.connect(callback)
+	parent.add_child(button)
+	return button
+
+func toggle_expanded() -> void:
+	expanded = not expanded
+	extra_controls.visible = expanded
+	heading_button.text = "♫  DISC GOLF EMPIRE RADIO   ▴" if expanded else "♫  DISC GOLF EMPIRE RADIO   ▾"
+	panel.offset_left = -475.0 if expanded else -385.0
+	panel.custom_minimum_size.x = 459.0 if expanded else 369.0
 
 func play_track(index: int) -> void:
 	if tracks.is_empty():
 		return
-	current_index = posmod(index, tracks.size())
-	var stream_resource: Resource = load(tracks[current_index])
+	var next_index: int = posmod(index, tracks.size())
+	var stream_resource: Resource = load(tracks[next_index])
 	if not (stream_resource is AudioStream):
-		push_warning("Disc Golf Empire Radio: Unable to load " + tracks[current_index])
+		push_warning("Disc Golf Empire Radio: Unable to load " + tracks[next_index])
 		return
+	current_index = next_index
 	player.stream = stream_resource as AudioStream
 	player.stream_paused = false
 	player.play()
-	play_button.text = "Ⅱ"
-	var track_title: String = tracks[current_index].get_file().get_basename().replace("_", " ")
-	banner_label.text = track_title
-	subtitle_label.text = "Now playing  •  Original Game Soundtrack"
-	banner.visible = true
-	if not expanded:
-		banner_timer.start()
+	track_label.text = tracks[current_index].get_file().get_basename().replace("_", " ")
+	details_label.text = "Track %d of %d  •  Original Game Soundtrack" % [current_index + 1, tracks.size()]
+	refresh_buttons()
 
 func _on_track_finished() -> void:
-	next_track()
+	if loop_enabled:
+		play_track(current_index)
+	else:
+		next_track()
 
 func next_track() -> void:
 	if tracks.is_empty():
 		return
 	if shuffle_enabled and tracks.size() > 1:
-		var offset: int = randomizer.randi_range(1, tracks.size() - 1)
-		play_track(current_index + offset)
+		play_track(current_index + randomizer.randi_range(1, tracks.size() - 1))
 	else:
 		play_track(current_index + 1)
 
@@ -205,12 +233,28 @@ func toggle_pause() -> void:
 	if player.stream == null:
 		return
 	player.stream_paused = not player.stream_paused
-	play_button.text = "▶" if player.stream_paused else "Ⅱ"
+	refresh_buttons()
 
 func toggle_shuffle() -> void:
 	shuffle_enabled = not shuffle_enabled
-	shuffle_button.text = "Mix On" if shuffle_enabled else "Mix Off"
+	refresh_buttons()
 	save_preferences()
+
+func toggle_loop() -> void:
+	loop_enabled = not loop_enabled
+	refresh_buttons()
+	save_preferences()
+
+func refresh_buttons() -> void:
+	var paused: bool = player != null and player.stream_paused
+	if compact_play_button != null:
+		compact_play_button.text = "▶" if paused else "Ⅱ"
+	if expanded_play_button != null:
+		expanded_play_button.text = "▶ Play" if paused else "Ⅱ Pause"
+	if shuffle_button != null:
+		shuffle_button.text = "Shuffle: On" if shuffle_enabled else "Shuffle: Off"
+	if loop_button != null:
+		loop_button.text = "Repeat: On" if loop_enabled else "Repeat: Off"
 
 func set_music_volume(value: float) -> void:
 	music_volume = clampf(value, 0.0, 1.0)
@@ -221,38 +265,16 @@ func update_volume() -> void:
 	if player != null:
 		player.volume_db = linear_to_db(maxf(music_volume, 0.0001))
 
-func toggle_expanded() -> void:
-	expanded = not expanded
-	controls.visible = expanded
-	if expanded:
-		banner_timer.stop()
-		banner.visible = true
-	else:
-		banner_timer.start()
-
-func toggle_radio_visibility() -> void:
-	if not banner.visible:
-		banner.visible = true
-		expanded = true
-		controls.visible = true
-		banner_timer.stop()
-	else:
-		banner.visible = false
-		expanded = false
-		controls.visible = false
-
-func _on_banner_timeout() -> void:
-	if not expanded:
-		banner.visible = false
-
 func load_preferences() -> void:
 	var config := ConfigFile.new()
 	if config.load(SETTINGS_FILE) == OK:
-		music_volume = float(config.get_value("radio", "volume", 0.65))
+		music_volume = clampf(float(config.get_value("radio", "volume", 0.65)), 0.0, 1.0)
 		shuffle_enabled = bool(config.get_value("radio", "shuffle", false))
+		loop_enabled = bool(config.get_value("radio", "loop", false))
 
 func save_preferences() -> void:
 	var config := ConfigFile.new()
 	config.set_value("radio", "volume", music_volume)
 	config.set_value("radio", "shuffle", shuffle_enabled)
+	config.set_value("radio", "loop", loop_enabled)
 	config.save(SETTINGS_FILE)
