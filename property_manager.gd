@@ -1074,39 +1074,55 @@ func add_driveway(points: Array) -> void:
 # STARTER FACILITIES — WITHIN OWNED PROPERTY
 # ==================================================
 
+func get_starter_facility(kind: String) -> Dictionary:
+	for value in buildings:
+		var item: Dictionary = value
+		if str(item.get("type", "")) == kind:
+			return item
+	return {}
+
+
 func generate_starter_facilities() -> void:
-	# All dimensions are in feet converted to game pixels (15 ft per cell).
+	# Handcrafted first property: the entrance is east of the pond.
+	# Sizes and offsets use 15 real feet per terrain cell.
 	var unit: float = CELL_SIZE / 15.0
-	var origin: Vector2 = property_world_origin
-	var entry_x: float = property_driveway_points[3].x
+	var rect: Rect2 = get_property_world_rect()
+	var entrance: Vector2 = property_driveway_points[3]
+	var parking: Vector2 = entrance + Vector2(-64.0, 0.0) * unit
+	var office: Vector2 = parking + Vector2(-48.0, -51.0) * unit
+	var shed: Vector2 = parking + Vector2(-91.0, 54.0) * unit
+	var yard: Vector2 = shed + Vector2(0.0, 46.0) * unit
 	var layout: Array = [
-		{"type": "starter_parking", "position": Vector2(entry_x + 34.0 * unit, origin.y + 112.0 * unit), "size": Vector2(66.0, 82.0) * unit, "rotation": 0.0},
-		{"type": "starter_office", "position": Vector2(entry_x - 35.0 * unit, origin.y + 119.0 * unit), "size": Vector2(24.0, 30.0) * unit, "rotation": 0.0},
-		{"type": "starter_shed", "position": Vector2(entry_x - 62.0 * unit, origin.y + 206.0 * unit), "size": Vector2(32.0, 42.0) * unit, "rotation": 0.0},
-		{"type": "starter_yard", "position": Vector2(entry_x + 8.0 * unit, origin.y + 214.0 * unit), "size": Vector2(46.0, 54.0) * unit, "rotation": 0.0}
+		{"type":"starter_parking", "position":parking, "size":Vector2(72.0, 62.0) * unit, "rotation":0.0},
+		{"type":"starter_office", "position":office, "size":Vector2(24.0, 30.0) * unit, "rotation":0.0},
+		{"type":"starter_shed", "position":shed, "size":Vector2(20.0, 25.0) * unit, "rotation":0.0},
+		{"type":"starter_yard", "position":yard, "size":Vector2(40.0, 38.0) * unit, "rotation":0.0}
 	]
-	var owned: Rect2 = get_property_world_rect()
 	for value in layout:
 		var item: Dictionary = value
 		var center: Vector2 = item["position"]
-		var dimensions: Vector2 = item["size"]
-		var footprint: Rect2 = Rect2(center - dimensions * 0.5, dimensions)
-		if not owned.encloses(footprint):
+		var size: Vector2 = item["size"]
+		var footprint: Rect2 = Rect2(center - size * 0.5, size)
+		var clearance: Rect2 = footprint.grow(5.0 * unit)
+		if not rect.encloses(clearance):
+			push_warning("Starter facility is outside owned property: " + str(item["type"]))
 			continue
-		# Reserve the footprint and surrounding access clearances.
-		var clearance: Rect2 = footprint.grow(10.0 * unit)
-		var has_water: bool = false
-		for y in range(maxi(0, int(floor((clearance.position.y - origin.y) / CELL_SIZE))), mini(PROPERTY_GRID_HEIGHT, int(ceil((clearance.end.y - origin.y) / CELL_SIZE)))):
-			for x in range(maxi(0, int(floor((clearance.position.x - origin.x) / CELL_SIZE))), mini(PROPERTY_GRID_WIDTH, int(ceil((clearance.end.x - origin.x) / CELL_SIZE)))):
+		var min_x: int = maxi(0, int(floor((clearance.position.x - property_world_origin.x) / CELL_SIZE)))
+		var max_x: int = mini(PROPERTY_GRID_WIDTH, int(ceil((clearance.end.x - property_world_origin.x) / CELL_SIZE)))
+		var min_y: int = maxi(0, int(floor((clearance.position.y - property_world_origin.y) / CELL_SIZE)))
+		var max_y: int = mini(PROPERTY_GRID_HEIGHT, int(ceil((clearance.end.y - property_world_origin.y) / CELL_SIZE)))
+		var overlaps_water: bool = false
+		for y in range(min_y, max_y):
+			for x in range(min_x, max_x):
 				if terrain[y][x] == WATER:
-					has_water = true
-		if has_water:
+					overlaps_water = true
+		if overlaps_water:
+			push_warning("Starter facility would overlap pond: " + str(item["type"]))
 			continue
 		buildings.append(item)
-		for y in range(maxi(0, int(floor((clearance.position.y - origin.y) / CELL_SIZE))), mini(PROPERTY_GRID_HEIGHT, int(ceil((clearance.end.y - origin.y) / CELL_SIZE)))):
-			for x in range(maxi(0, int(floor((clearance.position.x - origin.x) / CELL_SIZE))), mini(PROPERTY_GRID_WIDTH, int(ceil((clearance.end.x - origin.x) / CELL_SIZE)))):
-				if terrain[y][x] != WATER:
-					terrain[y][x] = DIRT
+		for y in range(min_y, max_y):
+			for x in range(min_x, max_x):
+				terrain[y][x] = DIRT
 		for i in range(trees.size() - 1, -1, -1):
 			if clearance.has_point(property_local_to_world(trees[i])):
 				trees.remove_at(i)
@@ -1123,47 +1139,13 @@ func generate_starter_facilities() -> void:
 
 func generate_property_entrance() -> void:
 	property_driveway_points.clear()
-
-	var property_rect: Rect2 = (
-		get_property_world_rect()
-	)
-
-	var entrance_x: float = (
-		property_rect.position.x
-		+ property_rect.size.x * 0.22
-	)
-
-	var road_y: float = (
-		get_road_reference_y()
-	)
-
-	property_driveway_points.append(
-		Vector2(
-			entrance_x,
-			road_y
-		)
-	)
-
-	property_driveway_points.append(
-		Vector2(
-			entrance_x + CELL_SIZE * 0.5,
-			property_rect.position.y - CELL_SIZE * 3.0
-		)
-	)
-
-	property_driveway_points.append(
-		Vector2(
-			entrance_x + CELL_SIZE * 1.2,
-			property_rect.position.y + CELL_SIZE * 3.0
-		)
-	)
-
-	property_driveway_points.append(
-		Vector2(
-			entrance_x + CELL_SIZE * 2.0,
-			property_rect.position.y + CELL_SIZE * 7.0
-		)
-	)
+	var rect: Rect2 = get_property_world_rect()
+	# The public road borders the east side of this starter property.
+	var y: float = rect.position.y + rect.size.y * 0.57
+	property_driveway_points.append(Vector2(rect.end.x + CELL_SIZE * 6.0, y))
+	property_driveway_points.append(Vector2(rect.end.x + CELL_SIZE * 1.0, y))
+	property_driveway_points.append(Vector2(rect.end.x - CELL_SIZE * 1.0, y))
+	property_driveway_points.append(Vector2(rect.end.x - CELL_SIZE * 3.5, y))
 
 
 # ==================================================
