@@ -143,6 +143,7 @@ func generate_property(seed_value: int) -> void:
 	generate_neighbor_buildings()
 	generate_driveways()
 	generate_property_entrance()
+	generate_starter_facilities()
 	generate_walking_trail()
 	generate_surrounding_world()
 
@@ -1068,6 +1069,51 @@ func add_driveway(points: Array) -> void:
 # ==================================================
 # PROPERTY ENTRANCE
 # ==================================================
+
+# ==================================================
+# STARTER FACILITIES — WITHIN OWNED PROPERTY
+# ==================================================
+
+func generate_starter_facilities() -> void:
+	var cell: float = CELL_SIZE
+	var origin: Vector2 = property_world_origin
+	var layout: Array = [
+		{"type": "starter_office", "position": origin + Vector2(13.0, 11.0) * cell, "size": Vector2(4.0, 3.0) * cell, "rotation": 0.0},
+		{"type": "starter_shed", "position": origin + Vector2(28.0, 11.0) * cell, "size": Vector2(5.0, 3.5) * cell, "rotation": 0.0},
+		{"type": "starter_parking", "position": origin + Vector2(20.0, 7.0) * cell, "size": Vector2(9.0, 4.0) * cell, "rotation": 0.0},
+		{"type": "starter_yard", "position": origin + Vector2(28.0, 17.0) * cell, "size": Vector2(6.0, 4.0) * cell, "rotation": 0.0}
+	]
+	var owned: Rect2 = get_property_world_rect()
+	for value in layout:
+		var item: Dictionary = value
+		var center: Vector2 = item["position"]
+		var dimensions: Vector2 = item["size"]
+		var footprint: Rect2 = Rect2(center - dimensions * 0.5, dimensions)
+		if not owned.encloses(footprint):
+			continue
+		buildings.append(item)
+		var local_min: Vector2 = footprint.position - origin
+		var local_max: Vector2 = footprint.end - origin
+		var x0: int = maxi(0, int(floor(local_min.x / cell)))
+		var x1: int = mini(PROPERTY_GRID_WIDTH - 1, int(ceil(local_max.x / cell)) - 1)
+		var y0: int = maxi(0, int(floor(local_min.y / cell)))
+		var y1: int = mini(PROPERTY_GRID_HEIGHT - 1, int(ceil(local_max.y / cell)) - 1)
+		for y in range(y0, y1 + 1):
+			for x in range(x0, x1 + 1):
+				terrain[y][x] = DIRT
+		for index in range(trees.size() - 1, -1, -1):
+			if footprint.grow(cell * 0.4).has_point(property_local_to_world(trees[index])):
+				trees.remove_at(index)
+				tree_sizes.remove_at(index)
+		for index in range(bushes.size() - 1, -1, -1):
+			if footprint.has_point(property_local_to_world(bushes[index])):
+				bushes.remove_at(index)
+				bush_sizes.remove_at(index)
+		for index in range(brush_clusters.size() - 1, -1, -1):
+			if footprint.has_point(property_local_to_world(brush_clusters[index])):
+				brush_clusters.remove_at(index)
+				brush_sizes.remove_at(index)
+
 
 func generate_property_entrance() -> void:
 	property_driveway_points.clear()
