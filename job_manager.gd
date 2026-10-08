@@ -154,6 +154,11 @@ func create_worker() -> int:
 		"position": get_maintenance_local_position(),
 		"wander_wait": float(next_worker_id) * 1.2,
 		"wander_destination": get_maintenance_local_position(),
+		"inspection_type": "",
+		"inspection_target": Vector2.ZERO,
+		"observation": "",
+		"observation_cell": Vector2i(-1, -1),
+		"observation_cooldown": 0.0,
 		"movement_path": [],
 		"movement_index": 0,
 
@@ -200,6 +205,7 @@ func _process(
 
 		var phase: String = str(worker.get("state", WORKER_IDLE))
 		if phase == WORKER_IDLE:
+			worker["observation_cooldown"] = maxf(0.0, float(worker.get("observation_cooldown", 0.0)) - delta)
 			process_idle_wander(worker, delta)
 			continue
 		if phase == WORKER_RETURNING:
@@ -493,22 +499,107 @@ func move_worker_to_facility(worker: Dictionary, delta: float) -> bool:
 
 
 func process_idle_wander(worker: Dictionary, delta: float) -> void:
+	# Workers inspect meaningful locations throughout the owned property.
+	# Inspections are informational: never create a job or modify terrain.
 	var waiting: float = float(worker.get("wander_wait", 0.0))
 	if waiting > 0.0:
 		worker["wander_wait"] = maxf(0.0, waiting - delta)
 		return
 	if worker.get("movement_path", []).is_empty():
-		var home: Vector2 = get_maintenance_local_position()
-		var rng: RandomNumberGenerator = RandomNumberGenerator.new()
-		rng.seed = int(worker["id"]) * 971 + int(Time.get_ticks_msec() / 5000)
-		var target: Vector2 = home + Vector2(rng.randf_range(-70.0, 70.0), rng.randf_range(-70.0, 70.0))
-		if not set_worker_route(worker, target):
-			worker["wander_wait"] = 3.0
-			return
+		if not choose_inspection_destination(worker):
+			worker["wander_wait"] = 4.0
+		return
 	if follow_worker_route(worker, delta):
 		worker["movement_path"] = []
 		worker["movement_index"] = 0
-		worker["wander_wait"] = 2.5 + float(worker["id"]) * 0.7
+		complete_worker_inspection(worker)
+		worker["wander_wait"] = 5.0 + float(worker["id"]) * 1.3
+
+
+func choose_inspection_destination(worker: Dictionary) -> bool:
+	if property_manager == null:
+		return false
+	var rng := RandomNumberGenerator.new()
+	rng.seed = int(worker["id"]) * 104729 + int(Time.get_ticks_msec() / 11000)
+	var choices: Array = []
+	# The sampled destinations cover the entire property, but favor
+	# places where vegetation or mowing may actually need attention.
+	for i in range(16):
+		var cell := Vector2i(rng.randi_range(2, property_manager.PROPERTY_GRID_WIDTH - 3), rng.randi_range(2, property_manager.PROPERTY_GRID_HEIGHT - 3))
+		var terrain_type: int = int(property_manager.terrain[cell.y][cell.x])
+		if terrain_type == property_manager.WATER:
+			continue
+		var kind := "Property patrol"
+		var weight := 1
+		if terrain_type == property_manager.TALL_GRASS or terrain_type == property_manager.ROUGH:
+			kind = "Grass inspection"
+			weight = 4
+		elif terrain_type == property_manager.WILD_GRASS:
+			kind = "Brush inspection"
+			weight = 4
+		else:
+			for tree_pos in property_manager.trees:
+				if tree_pos.distance_squared_to(property_manager.cell_to_world_center(cell)) < 110.0 * 110.0:
+					kind = "Woodland inspection"
+					weight = 3
+					break
+		choices.append({"cell": cell, "kind": kind, "weight": weight})
+	# Occasionally visit the facilities between inspections.
+	if rng.randf() < 0.18:
+		var home: Vector2 = get_maintenance_local_position()
+		if set_worker_route(worker, home):
+			worker["inspection_type"] = "Facility check"
+			worker["inspection_target"] = home
+			return true
+	choices.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["weight"]) > int(b["weight"]))
+	for choice in choices:
+		var destination: Vector2 = property_manager.cell_to_world_center(choice["cell"])
+		if set_worker_route(worker, destination):
+			worker["inspection_type"] = str(choice["kind"])
+			worker["inspection_target"] = destination
+			return true
+	return false
+
+
+func complete_worker_inspection(worker: Dictionary) -> void:
+	if property_manager == null or float(worker.get("observation_cooldown", 0.0)) > 0.0:
+		return
+	var kind: String = str(worker.get("inspection_type", ""))
+	var destination: Vector2 = worker.get("inspection_target", Vector2.ZERO)
+	var cell: Vector2i = property_manager.world_to_cell(destination)
+	if not property_manager.is_valid_cell(cell.x, cell.y):
+		return
+	var terrain_type: int = int(property_manager.terrain[cell.y][cell.x])
+	var note := ""
+	if kind == "Grass inspection" and (terrain_type == property_manager.TALL_GRASS or terrain_type == property_manager.ROUGH):
+		note = "Tall grass spotted near grid (%d, %d). Consider scheduling mowing." % [cell.x + 1, cell.y + 1]
+	elif kind == "Brush inspection" and terrain_type == property_manager.WILD_GRASS:
+		note = "Dense brush spotted near grid (%d, %d). Consider brush cutting." % [cell.x + 1, cell.y + 1]
+	elif kind == "Woodland inspection":
+		var nearby_trees := 0
+		for tree_pos in property_manager.trees:
+			if tree_pos.distance_squared_to(destination) < 110.0 * 110.0:
+				nearby_trees += 1
+		if nearby_trees >= 3:
+			note = "Dense tree cover near grid (%d, %d). Consider reviewing accessibility." % [cell.x + 1, cell.y + 1]
+	if note.is_empty():
+		return
+	if str(worker.get("observation", "")) == note:
+		return
+	worker["observation"] = note
+	worker["observation_cell"] = cell
+	worker["observation_cooldown"] = 75.0
+	workers_changed.emit()
+
+
+func get_worker_observations() -> Array:
+	var reports: Array = []
+	for worker_value in workers:
+		var worker: Dictionary = worker_value
+		var note: String = str(worker.get("observation", ""))
+		if not note.is_empty():
+			reports.append({"worker_id": int(worker["id"]), "text": note, "cell": worker.get("observation_cell", Vector2i(-1, -1))})
+	return reports
 
 
 # ==================================================
@@ -3096,8 +3187,8 @@ func get_worker_status_text(
 			"state",
 			WORKER_IDLE
 		) == WORKER_IDLE:
-
-			return "Idle"
+			var inspection: String = str(worker.get("inspection_type", ""))
+			return inspection if not inspection.is_empty() else "Idle"
 
 		var phase: String = str(worker.get("state", WORKER_IDLE))
 		if phase == WORKER_FETCHING:
