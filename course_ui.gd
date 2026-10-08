@@ -6,7 +6,7 @@ extends CanvasLayer
 # COLORS
 # ==================================================
 
-const UI_SCALE_FACTOR := 1.15
+const UI_SCALE_FACTOR := 1.61 # Previous 1.15 scale increased by 40%
 
 const COLOR_PANEL := Color(0.045, 0.065, 0.05, 0.97)
 const COLOR_CARD := Color(0.085, 0.115, 0.09, 0.98)
@@ -43,6 +43,8 @@ var empire_sidebar_content: VBoxContainer
 var empire_sidebar_toggle: Button
 var empire_sidebar_collapsed := false
 var empire_sidebar_buttons: Dictionary = {}
+var empire_sidebar_hints: Dictionary = {}
+var empire_sidebar_last_tool := ""
 
 
 
@@ -222,6 +224,8 @@ func create_interface() -> void:
 	apply_ui_scale()
 	create_empire_sidebar()
 	apply_empire_sidebar_layout()
+	if tooltip_panel != null:
+		tooltip_panel.hide() # Hints now live beside the selected tool.
 
 
 # ==================================================
@@ -2019,7 +2023,7 @@ func update_interface() -> void:
 	update_hole_information()
 	update_tool_buttons()
 	update_category_styles()
-	update_tooltip()
+	refresh_empire_sidebar()
 	update_course_information()
 	update_economy_information()
 	update_workforce_information()
@@ -2874,7 +2878,7 @@ func create_empire_sidebar() -> void:
 	heading.add_theme_constant_override("separation", 4)
 	outer.add_child(heading)
 
-	empire_sidebar_toggle = create_ui_button("≡  TOOLS", Vector2(0, 54))
+	empire_sidebar_toggle = create_ui_button("≡  TOOLS", Vector2(0, 76))
 	empire_sidebar_toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	empire_sidebar_toggle.pressed.connect(toggle_empire_sidebar)
 	heading.add_child(empire_sidebar_toggle)
@@ -2890,12 +2894,10 @@ func create_empire_sidebar() -> void:
 	empire_sidebar_scroll.add_child(empire_sidebar_content)
 
 	add_empire_sidebar_caption("COURSE DESIGN")
-	add_empire_sidebar_button("build", "▦  Build", _on_build_category_pressed)
 	add_empire_sidebar_button("tee", "   Tee Pad", _on_tee_pressed)
 	add_empire_sidebar_button("basket", "   Basket", _on_basket_pressed)
 	add_empire_sidebar_button("path", "   Path", _on_path_pressed)
 	add_empire_sidebar_caption("GROUNDSKEEPING")
-	add_empire_sidebar_button("landscape", "♣  Landscape", _on_landscape_category_pressed)
 	add_empire_sidebar_button("mower", "   Mower", _on_mower_pressed)
 	add_empire_sidebar_button("brush", "   Brush Cutter", _on_brush_pressed)
 	add_empire_sidebar_button("chainsaw", "   Chainsaw", _on_chainsaw_pressed)
@@ -2907,12 +2909,12 @@ func create_empire_sidebar() -> void:
 	var navigation := HBoxContainer.new()
 	navigation.add_theme_constant_override("separation", 5)
 	empire_sidebar_content.add_child(navigation)
-	var back := create_ui_button("‹ HOLE", Vector2(0, 54))
+	var back := create_ui_button("‹ HOLE", Vector2(0, 76))
 	back.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	back.pressed.connect(_on_previous_hole_pressed)
 	navigation.add_child(back)
 	empire_sidebar_buttons["previous"] = back
-	var forward := create_ui_button("HOLE ›", Vector2(0, 54))
+	var forward := create_ui_button("HOLE ›", Vector2(0, 76))
 	forward.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	forward.pressed.connect(_on_next_hole_pressed)
 	navigation.add_child(forward)
@@ -2922,18 +2924,41 @@ func create_empire_sidebar() -> void:
 func add_empire_sidebar_caption(caption_text: String) -> void:
 	var caption := Label.new()
 	caption.text = caption_text
-	caption.add_theme_font_size_override("font_size", 15)
+	caption.add_theme_font_size_override("font_size", 21)
 	caption.add_theme_color_override("font_color", COLOR_GOLD)
 	empire_sidebar_content.add_child(caption)
 
 func add_empire_sidebar_button(key: String, title: String, callback: Callable) -> void:
-	var button := create_ui_button(title, Vector2(0, 55))
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 8)
+	empire_sidebar_content.add_child(row)
+	var button := create_ui_button(title, Vector2(0, 77))
 	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	button.add_theme_font_size_override("font_size", 19)
+	button.add_theme_font_size_override("font_size", 27)
 	button.pressed.connect(callback)
-	empire_sidebar_content.add_child(button)
+	row.add_child(button)
 	empire_sidebar_buttons[key] = button
+	var hint := Label.new()
+	hint.visible = false
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 19)
+	hint.add_theme_color_override("font_color", COLOR_GOLD)
+	hint.custom_minimum_size = Vector2(135, 0)
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(hint)
+	empire_sidebar_hints[key] = hint
+
+func get_empire_tool_hint(tool_key: String) -> String:
+	match tool_key:
+		"tee": return "Drag to place tee"
+		"basket": return "Drag to place basket"
+		"path": return "Shape flight path"
+		"mower": return "Drag to mow grass"
+		"brush": return "Drag to clear brush"
+		"chainsaw": return "Tap tree to remove"
+		"view": return "Tap item to inspect"
+	return ""
 
 func toggle_empire_sidebar() -> void:
 	empire_sidebar_collapsed = not empire_sidebar_collapsed
@@ -2943,8 +2968,8 @@ func apply_empire_sidebar_layout() -> void:
 	if empire_sidebar == null:
 		return
 	var screen_width: float = get_viewport().get_visible_rect().size.x
-	var compact_width: float = 62.0
-	var expanded_width: float = minf(305.0, maxf(205.0, screen_width * 0.32))
+	var compact_width: float = 87.0
+	var expanded_width: float = minf(535.0, maxf(330.0, screen_width * 0.44))
 	var width: float = compact_width if empire_sidebar_collapsed else expanded_width
 	empire_sidebar.anchor_left = 0.0
 	empire_sidebar.anchor_right = 0.0
@@ -2952,13 +2977,13 @@ func apply_empire_sidebar_layout() -> void:
 	empire_sidebar.anchor_bottom = 1.0
 	empire_sidebar.offset_left = 12.0
 	empire_sidebar.offset_right = 12.0 + width
-	empire_sidebar.offset_top = 122.0
+	empire_sidebar.offset_top = 155.0
 	empire_sidebar.offset_bottom = -16.0
 	empire_sidebar.custom_minimum_size = Vector2.ZERO
 	empire_sidebar_scroll.visible = not empire_sidebar_collapsed
 	empire_sidebar_toggle.text = "☰" if empire_sidebar_collapsed else "≡  TOOLS  ‹"
 	if inspector_panel != null:
-		inspector_panel.offset_left = 90.0 if empire_sidebar_collapsed else width + 28.0
+		inspector_panel.offset_left = 110.0 if empire_sidebar_collapsed else width + 28.0
 		inspector_panel.offset_right = inspector_panel.offset_left + 620.0
 
 func refresh_empire_sidebar() -> void:
@@ -2968,8 +2993,17 @@ func refresh_empire_sidebar() -> void:
 	var tool_keys := {"tee": "TEE", "basket": "BASKET", "path": "PATH", "mower": "MOWER", "brush": "BRUSH", "chainsaw": "CHAINSAW", "view": "VIEW"}
 	for key in tool_keys:
 		var button: Button = empire_sidebar_buttons.get(key)
+		var is_active: bool = tool_name == tool_keys[key]
 		if button != null:
-			apply_tool_button_style(button, tool_name == tool_keys[key])
+			apply_tool_button_style(button, is_active)
+			button.add_theme_color_override("font_color", COLOR_GOLD if is_active else COLOR_TEXT)
+		var hint: Label = empire_sidebar_hints.get(key)
+		if hint != null:
+			hint.visible = is_active
+			if is_active:
+				hint.text = get_empire_tool_hint(key)
+	if tooltip_panel != null:
+		tooltip_panel.hide()
 	var previous: Button = empire_sidebar_buttons.get("previous")
 	var following: Button = empire_sidebar_buttons.get("next")
 	if previous != null and course_manager != null:
