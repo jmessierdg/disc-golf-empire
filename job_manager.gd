@@ -34,6 +34,8 @@ const STATE_COMPLETE := "complete"
 
 const WORKER_IDLE := "idle"
 const WORKER_WORKING := "working"
+const WORKER_RETURNING := "returning"
+const WORKER_FETCHING := "fetching"
 
 
 # ==================================================
@@ -149,8 +151,12 @@ func create_worker() -> int:
 		"state": WORKER_IDLE,
 		"job_id": -1,
 		"equipment_type": "",
+		"position": get_maintenance_local_position(),
+		"wander_wait": float(next_worker_id) * 1.2,
+		"wander_destination": get_maintenance_local_position(),
+		"movement_path": [],
+		"movement_index": 0,
 
-		"position": Vector2.ZERO,
 		"direction": Vector2.RIGHT,
 
 		"travelling": false,
@@ -192,10 +198,21 @@ func _process(
 			worker_value
 		)
 
-		if worker.get(
-			"state",
-			WORKER_IDLE
-		) != WORKER_WORKING:
+		var phase: String = str(worker.get("state", WORKER_IDLE))
+		if phase == WORKER_IDLE:
+			process_idle_wander(worker, delta)
+			continue
+		if phase == WORKER_RETURNING:
+			if move_worker_to_facility(worker, delta):
+				finish_equipment_return(worker)
+			continue
+		if phase == WORKER_FETCHING:
+			if move_worker_to_facility(worker, delta):
+				worker["state"] = WORKER_WORKING
+				worker["movement_path"] = []
+				worker["movement_index"] = 0
+			continue
+		if phase != WORKER_WORKING:
 			continue
 
 		var job_id: int = int(
@@ -227,7 +244,7 @@ func _process(
 
 	if (
 		course_renderer != null
-		and get_working_worker_count() > 0
+		and workers.size() > 0
 	):
 		course_renderer.refresh()
 
@@ -349,7 +366,7 @@ func assign_job_to_worker(
 		worker["id"]
 	)
 
-	worker["state"] = WORKER_WORKING
+	worker["state"] = WORKER_FETCHING
 
 	worker["job_id"] = int(
 		job["id"]
@@ -357,7 +374,8 @@ func assign_job_to_worker(
 
 	worker["equipment_type"] = equipment_type
 
-	worker["position"] = first_position
+	worker["movement_path"] = []
+	worker["movement_index"] = 0
 	worker["direction"] = Vector2.RIGHT
 
 	worker["travelling"] = false
@@ -377,35 +395,93 @@ func assign_job_to_worker(
 # RELEASE WORKER
 # ==================================================
 
-func release_worker(
-	worker: Dictionary
-) -> void:
-
-	var equipment_type: String = String(
-		worker.get(
-			"equipment_type",
-			""
-		)
-	)
-
-	release_equipment(
-		equipment_type
-	)
-
-	worker["state"] = WORKER_IDLE
+func release_worker(worker: Dictionary) -> void:
+	worker["state"] = WORKER_RETURNING
 	worker["job_id"] = -1
-	worker["equipment_type"] = ""
-
-	worker["travelling"] = false
-	worker["travel_path"] = []
-	worker["travel_path_index"] = 0
-
-	worker["travel_target_cell"] = Vector2i(
-		-1,
-		-1
-	)
-
+	worker["movement_path"] = []
+	worker["movement_index"] = 0
+	clear_worker_travel_path(worker)
 	workers_changed.emit()
+
+
+func finish_equipment_return(worker: Dictionary) -> void:
+	release_equipment(str(worker.get("equipment_type", "")))
+	worker["equipment_type"] = ""
+	worker["state"] = WORKER_IDLE
+	worker["wander_wait"] = 2.0
+	worker["movement_path"] = []
+	worker["movement_index"] = 0
+	workers_changed.emit()
+
+
+func get_maintenance_local_position() -> Vector2:
+	if property_manager == null:
+		return Vector2(80.0, 80.0)
+	var shed: Dictionary = property_manager.get_starter_facility("starter_shed")
+	if not shed.is_empty():
+		return property_manager.world_to_property_local(shed["position"])
+	var yard: Dictionary = property_manager.get_starter_facility("starter_yard")
+	if not yard.is_empty():
+		return property_manager.world_to_property_local(yard["position"])
+	return property_manager.get_property_world_rect().size * 0.5
+
+
+func get_worker_cell(local_pos: Vector2) -> Vector2i:
+	return Vector2i(clampi(int(local_pos.x / property_manager.CELL_SIZE), 0, property_manager.PROPERTY_GRID_WIDTH - 1), clampi(int(local_pos.y / property_manager.CELL_SIZE), 0, property_manager.PROPERTY_GRID_HEIGHT - 1))
+
+
+func set_worker_route(worker: Dictionary, target: Vector2) -> bool:
+	var current: Vector2 = worker.get("position", target)
+	var path: Array[Vector2i] = find_navigation_path(get_worker_cell(current), get_worker_cell(target))
+	if path.is_empty() and current.distance_to(target) > property_manager.CELL_SIZE * 1.5:
+		return false
+	var route: Array = []
+	for cell in path:
+		route.append(get_cell_center_local(cell))
+	route.append(target)
+	worker["movement_path"] = route
+	worker["movement_index"] = 0
+	return true
+
+
+func follow_worker_route(worker: Dictionary, delta: float) -> bool:
+	var route: Array = worker.get("movement_path", [])
+	var index: int = int(worker.get("movement_index", 0))
+	if index >= route.size():
+		return true
+	var target: Vector2 = route[index]
+	move_worker_to_position(worker, target, delta)
+	if worker["position"].distance_to(target) < 1.0:
+		index += 1
+		worker["movement_index"] = index
+	return index >= route.size()
+
+
+func move_worker_to_facility(worker: Dictionary, delta: float) -> bool:
+	if worker.get("movement_path", []).is_empty():
+		if not set_worker_route(worker, get_maintenance_local_position()):
+			# No walkable route: remain stationary and retry later.
+			return false
+	return follow_worker_route(worker, delta)
+
+
+func process_idle_wander(worker: Dictionary, delta: float) -> void:
+	var waiting: float = float(worker.get("wander_wait", 0.0))
+	if waiting > 0.0:
+		worker["wander_wait"] = maxf(0.0, waiting - delta)
+		return
+	if worker.get("movement_path", []).is_empty():
+		var home: Vector2 = get_maintenance_local_position()
+		var rng: RandomNumberGenerator = RandomNumberGenerator.new()
+		rng.seed = int(worker["id"]) * 971 + int(Time.get_ticks_msec() / 5000)
+		var target: Vector2 = home + Vector2(rng.randf_range(-70.0, 70.0), rng.randf_range(-70.0, 70.0))
+		if not set_worker_route(worker, target):
+			worker["wander_wait"] = 3.0
+			return
+	if follow_worker_route(worker, delta):
+		worker["movement_path"] = []
+		worker["movement_index"] = 0
+		worker["wander_wait"] = 2.5 + float(worker["id"]) * 0.7
 
 
 # ==================================================
@@ -1356,11 +1432,13 @@ func process_area_job(
 	)
 
 	if completed_cells == 0:
-
-		worker["position"] = (
-			target_position
-		)
-
+		if worker.get("movement_path", []).is_empty():
+			if not set_worker_route(worker, target_position):
+				return
+		if not follow_worker_route(worker, delta):
+			return
+		worker["movement_path"] = []
+		worker["movement_index"] = 0
 		process_cell_work(
 			job,
 			worker,
@@ -2976,6 +3054,12 @@ func get_worker_status_text(
 		) == WORKER_IDLE:
 
 			return "Idle"
+
+		var phase: String = str(worker.get("state", WORKER_IDLE))
+		if phase == WORKER_FETCHING:
+			return "Collecting equipment"
+		if phase == WORKER_RETURNING:
+			return "Returning equipment"
 
 		var job_id: int = int(
 			worker.get(
