@@ -1403,7 +1403,9 @@ func clear_active_gesture() -> void:
 	last_landscape_local_position = Vector2.ZERO
 
 	if course_renderer != null:
-		course_renderer.clear_landscape_cursor()
+		course_renderer.landscape_preview_visible = false
+		course_renderer.landscape_preview_radius = 0.0
+		course_renderer.refresh()
 
 	if camera_controller != null:
 		camera_controller.set_camera_input_enabled(
