@@ -36,6 +36,15 @@ const CATEGORY_LANDSCAPE := "LANDSCAPE"
 
 var active_category := CATEGORY_BUILD
 
+# Update 11: RollerCoaster Tycoon-inspired collapsible tool sidebar.
+var empire_sidebar: PanelContainer
+var empire_sidebar_scroll: ScrollContainer
+var empire_sidebar_content: VBoxContainer
+var empire_sidebar_toggle: Button
+var empire_sidebar_collapsed := false
+var empire_sidebar_buttons: Dictionary = {}
+
+
 
 # ==================================================
 # REFERENCES
@@ -211,6 +220,8 @@ func create_interface() -> void:
 	create_inspector()
 	create_crew_panel()
 	apply_ui_scale()
+	create_empire_sidebar()
+	apply_empire_sidebar_layout()
 
 
 # ==================================================
@@ -1926,6 +1937,8 @@ func _on_workers_pressed() -> void:
 	if crew_panel_open:
 		update_crew_panel()
 
+	refresh_empire_sidebar()
+
 
 func _on_crew_close_pressed() -> void:
 
@@ -2835,3 +2848,131 @@ func create_worker_card(
 	box.add_child(
 		job_label
 	)
+
+# ==================================================
+# UPDATE 11: STYLE 2 — LEFT COMMAND SIDEBAR
+# ==================================================
+# Existing tool actions and state machines remain authoritative.
+# The original bottom dock stays instantiated (for compatibility),
+# but is hidden in favor of this compact, touch-friendly command rail.
+
+func create_empire_sidebar() -> void:
+	if tool_dock != null:
+		tool_dock.hide()
+
+	empire_sidebar = PanelContainer.new()
+	empire_sidebar.name = "EmpireCommandSidebar"
+	empire_sidebar.set_anchors_preset(Control.PRESET_LEFT_WIDE)
+	empire_sidebar.add_theme_stylebox_override("panel", create_floating_panel_style())
+	add_child(empire_sidebar)
+
+	var outer := VBoxContainer.new()
+	outer.add_theme_constant_override("separation", 8)
+	empire_sidebar.add_child(outer)
+
+	var heading := HBoxContainer.new()
+	heading.add_theme_constant_override("separation", 4)
+	outer.add_child(heading)
+
+	empire_sidebar_toggle = create_ui_button("≡  TOOLS", Vector2(0, 54))
+	empire_sidebar_toggle.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	empire_sidebar_toggle.pressed.connect(toggle_empire_sidebar)
+	heading.add_child(empire_sidebar_toggle)
+
+	empire_sidebar_scroll = ScrollContainer.new()
+	empire_sidebar_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	empire_sidebar_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	outer.add_child(empire_sidebar_scroll)
+
+	empire_sidebar_content = VBoxContainer.new()
+	empire_sidebar_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	empire_sidebar_content.add_theme_constant_override("separation", 7)
+	empire_sidebar_scroll.add_child(empire_sidebar_content)
+
+	add_empire_sidebar_caption("COURSE DESIGN")
+	add_empire_sidebar_button("build", "▦  Build", _on_build_category_pressed)
+	add_empire_sidebar_button("tee", "   Tee Pad", _on_tee_pressed)
+	add_empire_sidebar_button("basket", "   Basket", _on_basket_pressed)
+	add_empire_sidebar_button("path", "   Path", _on_path_pressed)
+	add_empire_sidebar_caption("GROUNDSKEEPING")
+	add_empire_sidebar_button("landscape", "♣  Landscape", _on_landscape_category_pressed)
+	add_empire_sidebar_button("mower", "   Mower", _on_mower_pressed)
+	add_empire_sidebar_button("brush", "   Brush Cutter", _on_brush_pressed)
+	add_empire_sidebar_button("chainsaw", "   Chainsaw", _on_chainsaw_pressed)
+	add_empire_sidebar_caption("MANAGEMENT")
+	add_empire_sidebar_button("view", "◉  Inspect", _on_view_pressed)
+	add_empire_sidebar_button("crew", "♟  Grounds Crew", _on_workers_pressed)
+	add_empire_sidebar_button("camera", "⌖  Reset Camera", _on_reset_camera_pressed)
+
+	var navigation := HBoxContainer.new()
+	navigation.add_theme_constant_override("separation", 5)
+	empire_sidebar_content.add_child(navigation)
+	var back := create_ui_button("‹ HOLE", Vector2(0, 54))
+	back.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	back.pressed.connect(_on_previous_hole_pressed)
+	navigation.add_child(back)
+	empire_sidebar_buttons["previous"] = back
+	var forward := create_ui_button("HOLE ›", Vector2(0, 54))
+	forward.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	forward.pressed.connect(_on_next_hole_pressed)
+	navigation.add_child(forward)
+	empire_sidebar_buttons["next"] = forward
+	refresh_empire_sidebar()
+
+func add_empire_sidebar_caption(caption_text: String) -> void:
+	var caption := Label.new()
+	caption.text = caption_text
+	caption.add_theme_font_size_override("font_size", 15)
+	caption.add_theme_color_override("font_color", COLOR_GOLD)
+	empire_sidebar_content.add_child(caption)
+
+func add_empire_sidebar_button(key: String, title: String, callback: Callable) -> void:
+	var button := create_ui_button(title, Vector2(0, 55))
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.add_theme_font_size_override("font_size", 19)
+	button.pressed.connect(callback)
+	empire_sidebar_content.add_child(button)
+	empire_sidebar_buttons[key] = button
+
+func toggle_empire_sidebar() -> void:
+	empire_sidebar_collapsed = not empire_sidebar_collapsed
+	apply_empire_sidebar_layout()
+
+func apply_empire_sidebar_layout() -> void:
+	if empire_sidebar == null:
+		return
+	var screen_width: float = get_viewport().get_visible_rect().size.x
+	var compact_width: float = 62.0
+	var expanded_width: float = minf(305.0, maxf(205.0, screen_width * 0.32))
+	var width: float = compact_width if empire_sidebar_collapsed else expanded_width
+	empire_sidebar.anchor_left = 0.0
+	empire_sidebar.anchor_right = 0.0
+	empire_sidebar.anchor_top = 0.0
+	empire_sidebar.anchor_bottom = 1.0
+	empire_sidebar.offset_left = 12.0
+	empire_sidebar.offset_right = 12.0 + width
+	empire_sidebar.offset_top = 122.0
+	empire_sidebar.offset_bottom = -16.0
+	empire_sidebar.custom_minimum_size = Vector2.ZERO
+	empire_sidebar_scroll.visible = not empire_sidebar_collapsed
+	empire_sidebar_toggle.text = "☰" if empire_sidebar_collapsed else "≡  TOOLS  ‹"
+	if inspector_panel != null:
+		inspector_panel.offset_left = 90.0 if empire_sidebar_collapsed else width + 28.0
+		inspector_panel.offset_right = inspector_panel.offset_left + 620.0
+
+func refresh_empire_sidebar() -> void:
+	if empire_sidebar == null or course_builder == null:
+		return
+	var tool_name: String = course_builder.get_current_tool_name()
+	var tool_keys := {"tee": "TEE", "basket": "BASKET", "path": "PATH", "mower": "MOWER", "brush": "BRUSH", "chainsaw": "CHAINSAW", "view": "VIEW"}
+	for key in tool_keys:
+		var button: Button = empire_sidebar_buttons.get(key)
+		if button != null:
+			apply_tool_button_style(button, tool_name == tool_keys[key])
+	var previous: Button = empire_sidebar_buttons.get("previous")
+	var following: Button = empire_sidebar_buttons.get("next")
+	if previous != null and course_manager != null:
+		previous.disabled = course_manager.selected_hole <= 0
+	if following != null and course_manager != null:
+		following.disabled = course_manager.selected_hole >= course_manager.TOTAL_HOLES - 1
