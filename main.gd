@@ -277,6 +277,7 @@ func create_components() -> void:
 	path_manager.z_index = 1
 	add_child(path_manager)
 	path_manager.setup(property_manager, economy_manager, job_manager, course_manager)
+	job_manager.set_walkway_manager(path_manager)
 	course_ui.set_walkway_manager(path_manager)
 
 	# Disc Golf Empire Radio runs independently of gameplay UI.
