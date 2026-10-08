@@ -325,38 +325,45 @@ func _draw() -> void:
 # ==================================================
 
 func draw_starter_facilities() -> void:
+	var entry: Array = property_manager.property_driveway_points
+	if entry.size() >= 4:
+		var gate: Vector2 = entry[3]
+		var lot: Vector2 = gate + Vector2(65.0, 60.0)
+		var shop: Vector2 = gate + Vector2(-95.0, 255.0)
+		var yard: Vector2 = gate + Vector2(25.0, 270.0)
+		draw_line(gate, lot, Color(0.52, 0.47, 0.38), 27.0, true)
+		draw_line(gate + Vector2(0.0, 55.0), shop, Color(0.52, 0.47, 0.38), 23.0, true)
+		draw_line(shop, yard, Color(0.52, 0.47, 0.38), 21.0, true)
 	for value in property_manager.buildings:
 		var item: Dictionary = value
 		var kind: String = str(item.get("type", ""))
 		if not kind.begins_with("starter_"):
 			continue
 		var center: Vector2 = item["position"]
-		var dimensions: Vector2 = item["size"]
-		var area: Rect2 = Rect2(center - dimensions * 0.5, dimensions)
+		var size: Vector2 = item["size"]
+		var area: Rect2 = Rect2(center - size * 0.5, size)
 		if kind == "starter_parking":
-			draw_rect(area, Color(0.40, 0.39, 0.35), true)
-			draw_rect(area, Color(0.74, 0.70, 0.59), false, 3.0)
-			for i in range(1, 7):
-				var stripe_x: float = area.position.x + float(i) * area.size.x / 7.0
-				draw_line(Vector2(stripe_x, area.position.y + 6.0), Vector2(stripe_x, area.position.y + area.size.y * 0.38), Color(0.87, 0.84, 0.74), 2.0)
+			draw_rect(area, Color(0.47, 0.45, 0.40), true)
+			draw_rect(area, Color(0.68, 0.63, 0.52), false, 2.0)
+			for i in range(5):
+				var y: float = area.position.y + 9.0 + float(i) * (size.y - 18.0) / 5.0
+				draw_line(Vector2(area.position.x + 6.0, y), Vector2(center.x - 5.0, y), Color(0.86, 0.82, 0.71), 1.8)
 			continue
 		if kind == "starter_yard":
-			draw_rect(area, Color(0.46, 0.42, 0.34), true)
-			draw_rect(area, Color(0.76, 0.67, 0.42), false, 3.0)
+			draw_rect(area, Color(0.52, 0.46, 0.36), true)
+			draw_rect(area, Color(0.76, 0.67, 0.45), false, 2.0)
 			for i in range(3):
-				var spot: Vector2 = area.position + Vector2(20.0 + float(i) * 43.0, area.size.y * 0.5)
-				draw_rect(Rect2(spot, Vector2(23.0, 13.0)), Color(0.25, 0.47, 0.28), true)
+				var x: float = area.position.x + 10.0 + i * 29.0
+				draw_rect(Rect2(Vector2(x, center.y - 8.0), Vector2(17.0, 13.0)), Color(0.25, 0.42, 0.25), true)
 			continue
-		var roof: Color = Color(0.21, 0.37, 0.43)
-		if kind == "starter_shed":
-			roof = Color(0.34, 0.41, 0.35)
-		draw_rect(Rect2(area.position + Vector2(5.0, 6.0), area.size), Color(0.0, 0.0, 0.0, 0.25), true)
-		draw_rect(area, Color(0.75, 0.70, 0.57), true)
-		draw_rect(area.grow(-6.0), roof, true)
-		draw_line(Vector2(center.x, area.position.y + 7.0), Vector2(center.x, area.end.y - 7.0), Color(0.78, 0.78, 0.70), 3.0)
-		draw_rect(area, Color(0.18, 0.21, 0.20), false, 3.0)
+		var roof: Color = Color(0.21, 0.36, 0.42) if kind == "starter_office" else Color(0.35, 0.39, 0.34)
+		draw_rect(Rect2(area.position + Vector2(4.0, 5.0), size), Color(0.0, 0.0, 0.0, 0.22), true)
+		draw_rect(area, Color(0.78, 0.73, 0.61), true)
+		draw_rect(area.grow(-4.0), roof, true)
+		draw_line(Vector2(center.x, area.position.y + 4.0), Vector2(center.x, area.end.y - 4.0), Color(0.70, 0.72, 0.67), 2.0)
+		draw_rect(area, Color(0.19, 0.23, 0.20), false, 2.0)
 		var caption: String = "OFFICE" if kind == "starter_office" else "MAINTENANCE"
-		draw_string(ThemeDB.fallback_font, Vector2(area.position.x, area.position.y - 8.0), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 17, Color.WHITE)
+		draw_string(ThemeDB.fallback_font, Vector2(area.position.x, area.position.y - 7.0), caption, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, Color.WHITE)
 
 
 func draw_world_background() -> void:
@@ -2584,6 +2591,14 @@ func draw_view_highlight() -> void:
 
 		"path_point":
 			draw_path_point_view_highlight()
+
+		"building":
+			var index: int = int(viewed_object.get("index", -1))
+			if index >= 0 and index < property_manager.buildings.size():
+				var item: Dictionary = property_manager.buildings[index]
+				var center: Vector2 = item["position"]
+				var size: Vector2 = item["size"]
+				draw_rect(Rect2(center - size * 0.5, size).grow(5.0), Color(1.0, 0.85, 0.25), false, 3.0)
 
 
 func draw_tree_view_highlight() -> void:
