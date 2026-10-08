@@ -39,6 +39,7 @@ const COURSE_UI_SCRIPT = preload(
 )
 
 const PATH_MANAGER_SCRIPT = preload("res://path_manager.gd")
+const GOLFER_MANAGER_SCRIPT = preload("res://golfer_manager.gd")
 
 const RADIO_MANAGER_SCRIPT = preload(
 	"res://radio_manager.gd"
@@ -59,6 +60,7 @@ var course_builder
 var course_ui
 var radio_manager
 var path_manager
+var golfer_manager
 
 
 # ==================================================
@@ -280,6 +282,12 @@ func create_components() -> void:
 	job_manager.set_walkway_manager(path_manager)
 	course_ui.set_walkway_manager(path_manager)
 
+	# Persistent visitors draw independently of retained terrain layers.
+	golfer_manager = GOLFER_MANAGER_SCRIPT.new()
+	golfer_manager.name = "GolferManager"
+	add_child(golfer_manager)
+	golfer_manager.setup(property_manager, course_manager, path_manager)
+
 	# Disc Golf Empire Radio runs independently of gameplay UI.
 	radio_manager = RADIO_MANAGER_SCRIPT.new()
 	radio_manager.name = "RadioManager"
@@ -364,6 +372,13 @@ func handle_touch_pressed(
 		if path_manager.add_point(waypoint_world):
 			builder_consumed_touch[touch_event.index] = true
 			course_ui.update_interface()
+			return
+
+	# Tapping a visible golfer opens that persistent person profile.
+	if golfer_manager != null:
+		var tapped_world: Vector2 = camera_controller.screen_to_world(touch_event.position)
+		if golfer_manager.select_at(tapped_world):
+			builder_consumed_touch[touch_event.index] = true
 			return
 
 	var builder_used_touch: bool = (
