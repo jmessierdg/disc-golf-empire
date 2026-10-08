@@ -6,6 +6,8 @@ extends CanvasLayer
 # COLORS
 # ==================================================
 
+const UI_SCALE_FACTOR := 1.15
+
 const COLOR_PANEL := Color(0.045, 0.065, 0.05, 0.97)
 const COLOR_CARD := Color(0.085, 0.115, 0.09, 0.98)
 const COLOR_CARD_HOVER := Color(0.12, 0.16, 0.125, 1.0)
@@ -208,11 +210,55 @@ func create_interface() -> void:
 	create_pending_panel()
 	create_inspector()
 	create_crew_panel()
+	apply_ui_scale()
 
 
 # ==================================================
 # TOP HUD
 # ==================================================
+
+# ==================================================
+# ACCESSIBILITY / TOUCH TARGET SCALE
+# ==================================================
+
+func apply_ui_scale() -> void:
+	# Scale interface widgets, not the game world or camera.
+	# Each widget is visited once after the interface is constructed.
+	for child in get_children():
+		if child is Control:
+			scale_interface_branch(child)
+
+	# Increase the main panel footprints to accommodate larger text and touch targets.
+	if top_panel != null:
+		top_panel.offset_bottom = 110.0
+	if tool_dock != null:
+		tool_dock.offset_left = -747.5
+		tool_dock.offset_right = 747.5
+		tool_dock.offset_top = -218.0
+	if tooltip_panel != null:
+		tooltip_panel.offset_left = -471.5
+		tooltip_panel.offset_right = 471.5
+	if pending_panel != null:
+		pending_panel.offset_left = -333.5
+		pending_panel.offset_right = 333.5
+	if inspector_panel != null:
+		inspector_panel.offset_right = 743.0
+		inspector_panel.offset_top = -680.0
+	if crew_panel != null:
+		crew_panel.offset_left = -580.0
+		crew_panel.offset_bottom = 570.0
+
+func scale_interface_branch(widget: Control) -> void:
+	if widget.has_theme_font_size_override("font_size"):
+		var old_font_size: int = widget.get_theme_font_size("font_size")
+		widget.add_theme_font_size_override("font_size", int(ceil(float(old_font_size) * UI_SCALE_FACTOR)))
+	if widget.custom_minimum_size != Vector2.ZERO:
+		widget.custom_minimum_size *= UI_SCALE_FACTOR
+	for child in widget.get_children():
+		if child is Control:
+			scale_interface_branch(child)
+
+
 
 func create_top_hud() -> void:
 
