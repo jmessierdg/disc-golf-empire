@@ -31,6 +31,7 @@ enum Tool {
 # ==================================================
 
 const VIEW_NONE := ""
+const VIEW_BUILDING := "building"
 const VIEW_TREE := "tree"
 const VIEW_TEE := "tee"
 const VIEW_BASKET := "basket"
@@ -954,6 +955,17 @@ func find_path_insert_index(
 func handle_view_press(
 	world_position: Vector2
 ) -> bool:
+	for index in range(property_manager.buildings.size() - 1, -1, -1):
+		var item: Dictionary = property_manager.buildings[index]
+		var kind: String = str(item.get("type", ""))
+		if not kind.begins_with("starter_"):
+			continue
+		var center: Vector2 = item["position"]
+		var size: Vector2 = item["size"]
+		if Rect2(center - size * 0.5, size).has_point(world_position):
+			set_viewed_object({"type": VIEW_BUILDING, "index": index})
+			return false
+
 	var hole_index: int = (
 		course_manager.selected_hole
 	)
@@ -1026,7 +1038,7 @@ func handle_view_press(
 
 	clear_viewed_object()
 
-	return true
+	return false
 
 
 func set_viewed_object(
@@ -1071,6 +1083,17 @@ func get_viewed_object_info() -> Dictionary:
 	)
 
 	match object_type:
+		VIEW_BUILDING:
+			var index: int = int(viewed_object.get("index", -1))
+			if index < 0 or index >= property_manager.buildings.size():
+				return {}
+			var item: Dictionary = property_manager.buildings[index]
+			var kind: String = str(item.get("type", ""))
+			var names: Dictionary = {"starter_office": "OPERATIONS OFFICE", "starter_shed": "MAINTENANCE SHED", "starter_parking": "GRAVEL PARKING", "starter_yard": "EQUIPMENT YARD"}
+			var size: Vector2 = item["size"]
+			var scale_ft: float = 15.0 / property_manager.CELL_SIZE
+			return {"type": VIEW_BUILDING, "title": str(names.get(kind, "FACILITY")), "subtitle": "Starter property facility", "detail": "Footprint: %d x %d ft.\nOwned property infrastructure." % [roundi(size.x * scale_ft), roundi(size.y * scale_ft)], "action_text": "INFORMATION ONLY", "action_enabled": false, "destructive": false}
+
 		VIEW_TREE:
 			return get_tree_view_info()
 
@@ -1380,9 +1403,7 @@ func clear_active_gesture() -> void:
 	last_landscape_local_position = Vector2.ZERO
 
 	if course_renderer != null:
-		course_renderer.landscape_preview_visible = false
-		course_renderer.landscape_preview_radius = 0.0
-		course_renderer.refresh()
+		course_renderer.clear_landscape_cursor()
 
 	if camera_controller != null:
 		camera_controller.set_camera_input_enabled(
