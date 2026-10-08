@@ -58,6 +58,9 @@ var empire_drag_last_y := 0.0
 # REFERENCES
 # ==================================================
 
+var walkway_manager
+var walkway_status_label: Label
+
 var course_manager
 var economy_manager
 var course_builder
@@ -1851,6 +1854,8 @@ func _on_next_hole_pressed() -> void:
 
 
 func _on_tee_pressed() -> void:
+	if walkway_manager != null and walkway_manager.editing:
+		walkway_manager.cancel_draft()
 
 	course_builder.select_tee_tool()
 
@@ -1858,6 +1863,8 @@ func _on_tee_pressed() -> void:
 
 
 func _on_basket_pressed() -> void:
+	if walkway_manager != null and walkway_manager.editing:
+		walkway_manager.cancel_draft()
 
 	course_builder.select_basket_tool()
 
@@ -1865,6 +1872,8 @@ func _on_basket_pressed() -> void:
 
 
 func _on_path_pressed() -> void:
+	if walkway_manager != null and walkway_manager.editing:
+		walkway_manager.cancel_draft()
 
 	course_builder.select_path_tool()
 
@@ -1872,6 +1881,8 @@ func _on_path_pressed() -> void:
 
 
 func _on_mower_pressed() -> void:
+	if walkway_manager != null and walkway_manager.editing:
+		walkway_manager.cancel_draft()
 
 	course_builder.select_mower_tool()
 
@@ -1879,6 +1890,8 @@ func _on_mower_pressed() -> void:
 
 
 func _on_brush_pressed() -> void:
+	if walkway_manager != null and walkway_manager.editing:
+		walkway_manager.cancel_draft()
 
 	course_builder.select_brush_tool()
 
@@ -1886,6 +1899,8 @@ func _on_brush_pressed() -> void:
 
 
 func _on_chainsaw_pressed() -> void:
+	if walkway_manager != null and walkway_manager.editing:
+		walkway_manager.cancel_draft()
 
 	course_builder.select_chainsaw_tool()
 
@@ -1893,6 +1908,8 @@ func _on_chainsaw_pressed() -> void:
 
 
 func _on_view_pressed() -> void:
+	if walkway_manager != null and walkway_manager.editing:
+		walkway_manager.cancel_draft()
 
 	course_builder.select_view_tool()
 
@@ -2910,7 +2927,15 @@ func create_empire_sidebar() -> void:
 	add_empire_sidebar_caption("COURSE DESIGN")
 	add_empire_sidebar_button("tee", "   Tee Pad", _on_tee_pressed)
 	add_empire_sidebar_button("basket", "   Basket", _on_basket_pressed)
-	add_empire_sidebar_button("path", "   Path", _on_path_pressed)
+	add_empire_sidebar_button("path", "   Flight Path", _on_path_pressed)
+	add_empire_sidebar_button("walkway", "   Walkway", _on_walkway_pressed)
+	add_empire_sidebar_button("build_walkway", "   ✓ Build Trail", _on_build_walkway_pressed)
+	add_empire_sidebar_button("cancel_walkway", "   × Cancel Trail", _on_cancel_walkway_pressed)
+	walkway_status_label = Label.new()
+	walkway_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	walkway_status_label.add_theme_font_size_override("font_size", 19)
+	walkway_status_label.add_theme_color_override("font_color", COLOR_GOLD)
+	empire_sidebar_content.add_child(walkway_status_label)
 	add_empire_sidebar_caption("GROUNDSKEEPING")
 	add_empire_sidebar_button("mower", "   Mower", _on_mower_pressed)
 	add_empire_sidebar_button("brush", "   Brush Cutter", _on_brush_pressed)
@@ -2986,6 +3011,34 @@ func add_empire_sidebar_button(key: String, title: String, callback: Callable) -
 	row.add_child(hint)
 	empire_sidebar_hints[key] = hint
 
+func set_walkway_manager(manager_ref) -> void:
+	walkway_manager = manager_ref
+	walkway_manager.status_changed.connect(_on_walkway_status_changed)
+	refresh_empire_sidebar()
+
+func _on_walkway_status_changed(message: String) -> void:
+	if walkway_status_label != null:
+		walkway_status_label.text = message
+	refresh_empire_sidebar()
+
+func _on_walkway_pressed() -> void:
+	if walkway_manager == null:
+		return
+	course_builder.select_none_tool()
+	walkway_manager.toggle_editing()
+	refresh_empire_sidebar()
+
+func _on_build_walkway_pressed() -> void:
+	if walkway_manager != null:
+		walkway_manager.confirm_draft()
+		refresh_empire_sidebar()
+		update_interface()
+
+func _on_cancel_walkway_pressed() -> void:
+	if walkway_manager != null:
+		walkway_manager.cancel_draft()
+		refresh_empire_sidebar()
+
 func get_empire_tool_hint(tool_key: String) -> String:
 	match tool_key:
 		"tee": return "Drag to place tee"
@@ -3048,6 +3101,18 @@ func refresh_empire_sidebar() -> void:
 			hint.visible = is_active
 			if is_active:
 				hint.text = get_empire_tool_hint(key)
+	if walkway_manager != null:
+		var walkway_button: Button = empire_sidebar_buttons.get("walkway")
+		if walkway_button != null:
+			apply_tool_button_style(walkway_button, walkway_manager.editing)
+		var build_button: Button = empire_sidebar_buttons.get("build_walkway")
+		if build_button != null:
+			build_button.visible = walkway_manager.editing
+		var cancel_button: Button = empire_sidebar_buttons.get("cancel_walkway")
+		if cancel_button != null:
+			cancel_button.visible = walkway_manager.editing
+		if walkway_status_label != null:
+			walkway_status_label.text = walkway_manager.status
 	if tooltip_panel != null:
 		tooltip_panel.hide()
 	var radio_node = get_parent().get_node_or_null("RadioManager")
