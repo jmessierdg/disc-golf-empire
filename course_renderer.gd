@@ -14,6 +14,7 @@ var job_manager
 # Separate CanvasItems retain their drawing commands until invalidated.
 # 0 = terrain, 1 = course, 2 = moving characters/jobs, 3 = selection UI.
 var render_layer: int = 0
+var foliage_layer
 var course_layer
 var actors_layer
 var overlay_layer
@@ -202,9 +203,18 @@ func _process(
 
 # Keep the expensive static canvas untouched for ordinary tool interactions.
 func _create_render_layers() -> void:
+	foliage_layer = get_script().new()
+	foliage_layer.name = "FoliageCanvas"
+	foliage_layer.render_layer = 4
+	foliage_layer.z_index = 2
+	foliage_layer.property_manager = property_manager
+	foliage_layer.course_manager = course_manager
+	add_child(foliage_layer)
+
 	course_layer = get_script().new()
 	course_layer.name = "CourseCanvas"
 	course_layer.render_layer = 1
+	course_layer.z_index = 3
 	course_layer.property_manager = property_manager
 	course_layer.course_manager = course_manager
 	add_child(course_layer)
@@ -212,6 +222,7 @@ func _create_render_layers() -> void:
 	actors_layer = get_script().new()
 	actors_layer.name = "ActorsCanvas"
 	actors_layer.render_layer = 2
+	actors_layer.z_index = 4
 	actors_layer.property_manager = property_manager
 	actors_layer.course_manager = course_manager
 	add_child(actors_layer)
@@ -219,6 +230,7 @@ func _create_render_layers() -> void:
 	overlay_layer = get_script().new()
 	overlay_layer.name = "ToolOverlayCanvas"
 	overlay_layer.render_layer = 3
+	overlay_layer.z_index = 5
 	overlay_layer.property_manager = property_manager
 	overlay_layer.course_manager = course_manager
 	add_child(overlay_layer)
@@ -240,6 +252,8 @@ func refresh_immediately() -> void:
 	if render_layer == 0:
 		if course_layer != null:
 			course_layer.queue_redraw()
+		if foliage_layer != null:
+			foliage_layer.queue_redraw()
 		if actors_layer != null:
 			actors_layer.queue_redraw()
 		if overlay_layer != null:
@@ -263,6 +277,8 @@ func refresh_world() -> void:
 	if render_layer == 0:
 		world_refresh_count += 1
 		redraw_requested = true
+		if foliage_layer != null:
+			foliage_layer.redraw_requested = true
 		refresh()
 	else:
 		redraw_requested = true
@@ -383,15 +399,16 @@ func _draw() -> void:
 			draw_neighbor_fields()
 			draw_public_road()
 			draw_walking_trail()
-			draw_world_trees()
 			draw_owned_property()
 			draw_property_ground_cover()
 			draw_water()
+			draw_property_boundary()
+		4:
+			draw_world_trees()
 			draw_property_bushes()
 			draw_property_brush()
 			draw_property_trees()
 			draw_starter_facilities()
-			draw_property_boundary()
 		1:
 			draw_all_holes()
 		2:
