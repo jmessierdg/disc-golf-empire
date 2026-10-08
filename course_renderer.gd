@@ -314,6 +314,7 @@ func _draw() -> void:
 
 	draw_landscape_preview()
 	draw_view_highlight()
+	draw_selected_worker_highlight()
 
 
 # ==================================================
@@ -2809,3 +2810,19 @@ func draw_selection_ring(
 		5.0,
 		true
 	)
+
+# Worker selection highlight (independent of active work orders).
+func draw_selected_worker_highlight() -> void:
+	if job_manager == null or property_manager == null:
+		return
+	if str(viewed_object.get("type", "")) != "worker":
+		return
+	var selected_id: int = int(viewed_object.get("worker_id", -1))
+	for worker_value in job_manager.get_all_workers():
+		var worker: Dictionary = worker_value
+		if int(worker.get("id", -1)) != selected_id:
+			continue
+		var local_pos: Vector2 = worker.get("position", Vector2(-1, -1))
+		if local_pos.x >= 0.0:
+			draw_arc(property_manager.property_local_to_world(local_pos), 20.0, 0.0, TAU, 32, Color(1.0, 0.85, 0.28, 0.95), 3.0, true)
+		return
