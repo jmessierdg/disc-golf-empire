@@ -4,7 +4,7 @@ extends CanvasLayer
 
 const MUSIC_DIRECTORY := "res://music"
 const SETTINGS_FILE := "user://radio_settings.cfg"
-const UI_SCALE := 1.15
+const UI_SCALE := 1.61
 
 var tracks: Array[String] = []
 var current_index: int = -1
@@ -75,11 +75,11 @@ func build_interface() -> void:
 	panel.anchor_right = 1.0
 	panel.anchor_top = 0.38
 	panel.anchor_bottom = 0.38
-	panel.offset_left = -385.0
+	panel.offset_left = -535.0
 	panel.offset_right = -16.0
 	panel.offset_top = 0.0
-	panel.offset_bottom = 98.0
-	panel.custom_minimum_size = Vector2(369.0, 98.0)
+	panel.offset_bottom = 137.0
+	panel.custom_minimum_size = Vector2(519.0, 137.0)
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	overlay.add_child(panel)
 
@@ -102,7 +102,7 @@ func build_interface() -> void:
 	heading_button.text = "♫  DISC GOLF EMPIRE RADIO   ▾"
 	heading_button.flat = true
 	heading_button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	heading_button.add_theme_font_size_override("font_size", 14)
+	heading_button.add_theme_font_size_override("font_size", 20)
 	heading_button.pressed.connect(toggle_expanded)
 	stack.add_child(heading_button)
 
@@ -117,14 +117,14 @@ func build_interface() -> void:
 	track_label = Label.new()
 	track_label.text = "Disc Golf Empire Radio"
 	track_label.clip_text = true
-	track_label.add_theme_font_size_override("font_size", 19)
+	track_label.add_theme_font_size_override("font_size", 27)
 	track_label.add_theme_color_override("font_color", Color(0.95, 0.98, 0.92))
 	track_column.add_child(track_label)
 
 	details_label = Label.new()
 	details_label.text = "Original Game Soundtrack"
 	details_label.clip_text = true
-	details_label.add_theme_font_size_override("font_size", 12)
+	details_label.add_theme_font_size_override("font_size", 17)
 	details_label.add_theme_color_override("font_color", Color(0.68, 0.81, 0.72))
 	track_column.add_child(details_label)
 
@@ -145,7 +145,7 @@ func build_interface() -> void:
 
 	var label := Label.new()
 	label.text = "PLAYBACK CONTROLS"
-	label.add_theme_font_size_override("font_size", 13)
+	label.add_theme_font_size_override("font_size", 18)
 	label.add_theme_color_override("font_color", Color(0.66, 0.80, 0.70))
 	extra_controls.add_child(label)
 
@@ -167,10 +167,10 @@ func build_interface() -> void:
 	extra_controls.add_child(volume_row)
 	var volume_text := Label.new()
 	volume_text.text = "Music volume"
-	volume_text.add_theme_font_size_override("font_size", 14)
+	volume_text.add_theme_font_size_override("font_size", 20)
 	volume_row.add_child(volume_text)
 	volume_slider = HSlider.new()
-	volume_slider.custom_minimum_size = Vector2(180.0, 32.0)
+	volume_slider.custom_minimum_size = Vector2(252.0, 45.0)
 	volume_slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	volume_slider.min_value = 0.0
 	volume_slider.max_value = 1.0
@@ -182,8 +182,8 @@ func build_interface() -> void:
 func add_transport_button(parent: HBoxContainer, title: String, callback: Callable) -> Button:
 	var button := Button.new()
 	button.text = title
-	button.custom_minimum_size = Vector2(42.0, 39.0)
-	button.add_theme_font_size_override("font_size", 14)
+	button.custom_minimum_size = Vector2(59.0, 55.0)
+	button.add_theme_font_size_override("font_size", 20)
 	button.pressed.connect(callback)
 	parent.add_child(button)
 	return button
@@ -192,8 +192,8 @@ func toggle_expanded() -> void:
 	expanded = not expanded
 	extra_controls.visible = expanded
 	heading_button.text = "♫  DISC GOLF EMPIRE RADIO   ▴" if expanded else "♫  DISC GOLF EMPIRE RADIO   ▾"
-	panel.offset_left = -475.0 if expanded else -385.0
-	panel.custom_minimum_size.x = 459.0 if expanded else 369.0
+	panel.offset_left = -665.0 if expanded else -535.0
+	panel.custom_minimum_size.x = 649.0 if expanded else 519.0
 
 func play_track(index: int) -> void:
 	if tracks.is_empty():
