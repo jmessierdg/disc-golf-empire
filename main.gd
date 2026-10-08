@@ -38,6 +38,8 @@ const COURSE_UI_SCRIPT = preload(
 	"res://course_ui.gd"
 )
 
+const PATH_MANAGER_SCRIPT = preload("res://path_manager.gd")
+
 const RADIO_MANAGER_SCRIPT = preload(
 	"res://radio_manager.gd"
 )
@@ -56,6 +58,7 @@ var camera_controller
 var course_builder
 var course_ui
 var radio_manager
+var path_manager
 
 
 # ==================================================
@@ -267,6 +270,13 @@ func create_components() -> void:
 	)
 
 
+	# Walkway construction is independent from flight-path editing.
+	path_manager = PATH_MANAGER_SCRIPT.new()
+	path_manager.name = "PathManager"
+	add_child(path_manager)
+	path_manager.setup(property_manager, economy_manager, job_manager, course_manager)
+	course_ui.set_walkway_manager(path_manager)
+
 	# Disc Golf Empire Radio runs independently of gameplay UI.
 	radio_manager = RADIO_MANAGER_SCRIPT.new()
 	radio_manager.name = "RadioManager"
@@ -346,6 +356,13 @@ func handle_touch_pressed(
 		return
 
 
+	if path_manager != null and path_manager.editing:
+		var waypoint_world: Vector2 = camera_controller.screen_to_world(touch_event.position)
+		if path_manager.add_point(waypoint_world):
+			builder_consumed_touch[touch_event.index] = true
+			course_ui.update_interface()
+			return
+
 	var builder_used_touch: bool = (
 		course_builder.touch_pressed(
 			touch_event.index,
@@ -397,6 +414,8 @@ func handle_touch_dragged(
 		)
 
 
+	if builder_used_touch and path_manager != null and path_manager.editing:
+		return
 	if builder_used_touch:
 
 		course_builder.touch_dragged(
@@ -440,7 +459,9 @@ func handle_touch_released(
 		)
 
 
-	if builder_used_touch:
+	if builder_used_touch and path_manager != null and path_manager.editing:
+		pass
+	elif builder_used_touch:
 
 		course_builder.touch_released(
 			touch_event.index
