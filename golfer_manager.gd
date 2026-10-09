@@ -1,5 +1,5 @@
-# Disc Golf Empire - Update 30: golfer presentation polish on stable Update 29 behavior.
-# No licensed brands, no simulated disc flight yet.
+# Disc Golf Empire - Update 31: skill-scaled throws and animated disc flight.
+# Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
 signal visitor_arrived(person_id: int)
@@ -20,6 +20,10 @@ const THROW_INTERVAL := 1.6
 const MAX_STROKES := 12
 const FEET_PER_PIXEL := 15.0 / 32.0
 const PUTT_RANGE_PIXELS := 42.0
+const FLIGHT_MIN_SECONDS := 0.65
+const FLIGHT_MAX_SECONDS := 2.3
+const FLIGHT_ARC_PIXELS := 36.0
+const FLIGHT_DISC_RADIUS := 4.0
 const SAVE_PATH := "user://dge_people_v1.json"
 const FIRST_NAMES := ["Ethan", "Morgan", "Avery", "Taylor", "Riley", "Jordan", "Casey", "Alex", "Jamie", "Quinn", "Parker", "Rowan", "Sam", "Cameron"]
 const LAST_NAMES := ["Brooks", "Reed", "Morgan", "Walker", "Parker", "Bennett", "Hayes", "Rivera", "Turner", "Ellis", "Stone", "Miller"]
@@ -146,6 +150,9 @@ func may_throw(visitor: Dictionary) -> bool:
 	if partner.is_empty():
 		return false
 	if int(partner["hole_cursor"]) != int(visitor["hole_cursor"]):
+		return false
+	# Keep only one disc airborne per twosome.
+	if str(partner["stage"]) == "disc_flying":
 		return false
 	# On a new hole, both players must be on the tee before tee-off.
 	if int(visitor["strokes"]) == 0 and int(partner["strokes"]) == 0:
@@ -310,7 +317,9 @@ func spawn_visitor() -> void:
 			"route_distance": 0.0, "strokes": 0, "round_scores": {},
 			"disc_position": start, "last_throw": "", "throw_wait": 0.0,
 			"round_recorded": false, "destination": slot, "destination_kind": "parking",
-			"tee_ready": false, "shot_pause": 0.0, "checked_in": false
+			"tee_ready": false, "shot_pause": 0.0, "checked_in": false,
+			"flight_start": start, "flight_end": start, "flight_elapsed": 0.0,
+			"flight_duration": 0.0, "flight_sunk": false
 		}
 		pair.append(visitor)
 	pair[0]["partner_id"] = int(pair[1]["id"])
@@ -397,6 +406,10 @@ func _process(delta: float) -> void:
 				if may_throw(visitor):
 					perform_throw(visitor)
 					finish_throw_turn(visitor)
+			"disc_flying":
+				visitor["flight_elapsed"] = minf(float(visitor["flight_duration"]), float(visitor["flight_elapsed"]) + delta)
+				if float(visitor["flight_elapsed"]) >= float(visitor["flight_duration"]):
+					complete_flight(visitor)
 			"parking":
 				advance_stage(visitor)
 			"walking_to_checkin", "walking_to_tee", "walking_to_lie", "walking_to_basket", "walking_to_car":
@@ -544,8 +557,9 @@ func advance_visitor(visitor: Dictionary, delta: float) -> bool:
 		visitor["route_index"] = index + 1
 	return int(visitor["route_index"]) >= route.size()
 
-# The first playable round uses skill-based landing positions, not full disc physics.
-# Each shot is discrete, visible on the course, and counted toward the hole score.
+# Distances are property-local pixels; 32 px represents 15 real feet.
+# A recreational player's drive typically travels farther than the old 24-264 px range.
+# This is a gameplay approximation, not a full aerodynamic physics simulation.
 func perform_throw(visitor: Dictionary) -> void:
 	var holes: Array = visitor["holes"]
 	var hole_number: int = int(holes[int(visitor["hole_cursor"])])
@@ -562,11 +576,17 @@ func perform_throw(visitor: Dictionary) -> void:
 	var control: float = float(skills["control"])
 	var power: float = float(skills["power"])
 	var skill_factor: float = clampf((accuracy + control) / 200.0, 0.1, 1.0)
-	var reach: float = (24.0 + power * 2.4) if not putting else (18.0 + accuracy * 0.36)
-	var forward: float = minf(remaining, reach * rng.randf_range(0.75, 1.08))
+	# A typical 40-60 power golfer reaches roughly 190-255 feet on a full drive.
+	# Higher-power players can reach 300+ feet; approaches scale down near the pin.
+	var drive_feet: float = 120.0 + power * 2.15
+	var max_reach: float = drive_feet / FEET_PER_PIXEL
+	var reach: float = max_reach if not putting else (18.0 + accuracy * 0.36)
+	var forward: float = minf(remaining, reach * rng.randf_range(0.78, 1.07))
 	var direction: Vector2 = (basket - lie).normalized()
+	if direction.length_squared() < 0.001:
+		direction = Vector2.RIGHT
 	var perpendicular: Vector2 = Vector2(-direction.y, direction.x)
-	var dispersion: float = (1.0 - skill_factor) * (5.0 if putting else 45.0)
+	var dispersion: float = (1.0 - skill_factor) * (6.0 if putting else 65.0)
 	var lateral: float = rng.randf_range(-dispersion, dispersion)
 	var landing: Vector2 = clamp_to_property(lie + direction * forward + perpendicular * lateral)
 	if navigation_manager != null:
@@ -585,19 +605,42 @@ func perform_throw(visitor: Dictionary) -> void:
 	if sunk:
 		landing = basket
 	visitor["strokes"] = int(visitor["strokes"]) + 1
-	visitor["disc_position"] = landing
-	visitor["last_throw"] = "Putt" if putting else "Drive / approach"
-	if sunk or int(visitor["strokes"]) >= MAX_STROKES:
+	visitor["last_throw"] = "Putt" if putting else ("Drive" if int(visitor["strokes"]) == 1 else "Approach")
+	visitor["flight_start"] = lie
+	visitor["flight_end"] = landing
+	visitor["flight_elapsed"] = 0.0
+	var travel: float = lie.distance_to(landing)
+	visitor["flight_duration"] = clampf(0.5 + travel / 360.0, FLIGHT_MIN_SECONDS, FLIGHT_MAX_SECONDS)
+	visitor["flight_sunk"] = sunk or int(visitor["strokes"]) >= MAX_STROKES
+	visitor["stage"] = "disc_flying"
+	if selected_id == int(visitor["id"]) and profile_panel.visible:
+		show_profile(selected_id)
+
+
+func complete_flight(visitor: Dictionary) -> void:
+	var landing: Vector2 = visitor["flight_end"]
+	var basket: Vector2 = hole_local(int(visitor["holes"][int(visitor["hole_cursor"])]), "basket")
+	if bool(visitor["flight_sunk"]):
 		visitor["disc_position"] = basket
 		visitor["wait"] = 1.2
 		visitor["stage"] = "walking_to_basket"
 		set_destination(visitor, basket)
 	else:
+		visitor["disc_position"] = landing
 		visitor["stage"] = "walking_to_lie"
 		visitor["wait"] = THROW_INTERVAL
 		set_destination(visitor, landing)
-	if selected_id == int(visitor["id"]) and profile_panel.visible:
-		show_profile(selected_id)
+
+
+func get_flight_visual(visitor: Dictionary) -> Vector2:
+	var duration: float = maxf(0.01, float(visitor.get("flight_duration", 1.0)))
+	var t: float = clampf(float(visitor.get("flight_elapsed", 0.0)) / duration, 0.0, 1.0)
+	var start: Vector2 = visitor["flight_start"]
+	var finish: Vector2 = visitor["flight_end"]
+	var flat: Vector2 = start.lerp(finish, t)
+	var arc: float = sin(t * PI) * minf(FLIGHT_ARC_PIXELS, start.distance_to(finish) * 0.12)
+	return flat + Vector2(0.0, -arc)
+
 
 func finish_hole(visitor: Dictionary) -> void:
 	var holes: Array = visitor["holes"]
@@ -678,6 +721,7 @@ func get_activity_label(stage: String) -> String:
 		"walking_to_tee": return "To tee"
 		"waiting_at_tee": return "At tee"
 		"throwing": return "Throwing"
+		"disc_flying": return "Disc flying"
 		"walking_to_lie": return "Retrieving"
 		"walking_to_basket": return "Finishing"
 		"waiting_at_basket": return "Hole complete"
@@ -718,13 +762,14 @@ func _draw() -> void:
 		draw_line(body + Vector2(0, -1), body + Vector2(0, 5), color.darkened(0.28), 5.0)
 		draw_circle(body + Vector2(0, -2), 5.5, color)
 		draw_circle(body + Vector2(0, -9), 4.0, Color("efc49d"))
-		if stage in ["throwing", "walking_to_lie", "walking_to_basket"]:
-			var disc_world: Vector2 = property_manager.property_local_to_world(visitor["disc_position"])
+		if stage in ["throwing", "disc_flying", "walking_to_lie", "walking_to_basket"]:
+			var disc_local: Vector2 = get_flight_visual(visitor) if stage == "disc_flying" else visitor["disc_position"]
+			var disc_world: Vector2 = property_manager.property_local_to_world(disc_local)
 			draw_circle(disc_world + Vector2(1, 2), 4.5, Color(0, 0, 0, 0.24))
-			draw_circle(disc_world, 3.5, Color(0.98, 0.83, 0.23, 1.0))
+			draw_circle(disc_world, FLIGHT_DISC_RADIUS, Color(0.98, 0.83, 0.23, 1.0))
 			draw_arc(disc_world, 5.5, 0.0, TAU, 12, Color(0.13, 0.16, 0.12, 0.8), 1.0)
 		# Restrict status labels to stationary interactions to reduce clutter.
-		if stage in ["waiting_partner", "waiting_at_checkin", "waiting_at_tee", "throwing", "waiting_at_basket"]:
+		if stage in ["waiting_partner", "waiting_at_checkin", "waiting_at_tee", "throwing", "disc_flying", "waiting_at_basket"]:
 			var label_text: String = get_activity_label(stage)
 			var font: Font = ThemeDB.fallback_font
 			var font_size: int = 11
@@ -786,7 +831,7 @@ func show_profile(person_id: int) -> void:
 	profile_label.text = "%s  •  Age %d\n%s  •  %s\n%s-handed  •  %s\n\nPower %d   Accuracy %d\nPutting %d   Control %d\nCourse IQ %d   Composure %d\n\nVisits: %d   Holes visited: %d" % [str(person["name"]), int(person["age"]), membership, str(person["classification"]), str(person["handedness"]), str(person["personality"]), int(skills["power"]), int(skills["accuracy"]), int(skills["putting"]), int(skills["control"]), int(skills["course_iq"]), int(skills["composure"]), int(person["visits"]), int(person["holes_visited"])]
 	for visitor_value in visitors:
 		var active: Dictionary = visitor_value
-		if int(active["id"]) == person_id and str(active["stage"]) in ["throwing", "walking_to_lie", "walking_to_basket"]:
+		if int(active["id"]) == person_id and str(active["stage"]) in ["throwing", "disc_flying", "walking_to_lie", "walking_to_basket"]:
 			profile_label.text += "\n\nHole %d | Strokes: %d\n%s" % [int(active["holes"][int(active["hole_cursor"])]) + 1, int(active["strokes"]), str(active["last_throw"])]
 			break
 	if not person["history"].is_empty():
