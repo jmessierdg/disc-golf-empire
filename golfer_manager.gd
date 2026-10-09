@@ -8,6 +8,10 @@ signal visitor_departed(person_id: int)
 const MAX_VISITORS := 3
 const WALK_SPEED := 54.0
 const SPAWN_INTERVAL := 14.0
+const THROW_INTERVAL := 1.6
+const MAX_STROKES := 12
+const FEET_PER_PIXEL := 15.0 / 32.0
+const PUTT_RANGE_PIXELS := 42.0
 const SAVE_PATH := "user://dge_people_v1.json"
 const FIRST_NAMES := ["Ethan", "Morgan", "Avery", "Taylor", "Riley", "Jordan", "Casey", "Alex", "Jamie", "Quinn", "Parker", "Rowan", "Sam", "Cameron"]
 const LAST_NAMES := ["Brooks", "Reed", "Morgan", "Walker", "Parker", "Bennett", "Hayes", "Rivera", "Turner", "Ellis", "Stone", "Miller"]
@@ -90,7 +94,7 @@ func spawn_visitor() -> void:
 		return
 	var person: Dictionary = make_person()
 	var start: Vector2 = get_entrance_local()
-	var visitor: Dictionary = {"id": int(person["id"]), "position": start, "state": "arriving", "holes": holes, "hole_cursor": 0, "stage": "tee", "route": [], "route_index": 0, "wait": 0.0, "walked": 0.0, "off_path": 0.0, "route_distance": 0.0}
+	var visitor: Dictionary = {"id": int(person["id"]), "position": start, "state": "arriving", "holes": holes, "hole_cursor": 0, "stage": "tee", "route": [], "route_index": 0, "wait": 0.0, "walked": 0.0, "off_path": 0.0, "route_distance": 0.0, "strokes": 0, "round_scores": {}, "disc_position": start, "last_throw": "", "throw_wait": 0.0}
 	visitors.append(visitor)
 	set_destination(visitor, hole_local(holes[0], "tee"))
 	visitor_arrived.emit(int(person["id"]))
@@ -109,6 +113,9 @@ func _process(delta: float) -> void:
 		var visitor: Dictionary = visitors[i]
 		if float(visitor["wait"]) > 0.0:
 			visitor["wait"] = maxf(0.0, float(visitor["wait"]) - delta)
+			continue
+		if str(visitor["stage"]) == "throwing":
+			perform_throw(visitor)
 			continue
 		if advance_visitor(visitor, delta):
 			advance_stage(visitor)
@@ -211,31 +218,100 @@ func advance_visitor(visitor: Dictionary, delta: float) -> bool:
 		visitor["route_index"] = index + 1
 	return int(visitor["route_index"]) >= route.size()
 
+# The first playable round uses skill-based landing positions, not full disc physics.
+# Each shot is discrete, visible on the course, and counted toward the hole score.
+func perform_throw(visitor: Dictionary) -> void:
+	var holes: Array = visitor["holes"]
+	var hole_number: int = int(holes[int(visitor["hole_cursor"])])
+	if not course_manager.is_hole_complete(hole_number):
+		finish_hole(visitor)
+		return
+	var person: Dictionary = people[int(visitor["id"])]
+	var skills: Dictionary = person["skills"]
+	var basket: Vector2 = hole_local(hole_number, "basket")
+	var lie: Vector2 = visitor["disc_position"]
+	var remaining: float = lie.distance_to(basket)
+	var putting: bool = remaining <= PUTT_RANGE_PIXELS
+	var accuracy: float = float(skills["putting"] if putting else skills["accuracy"])
+	var control: float = float(skills["control"])
+	var power: float = float(skills["power"])
+	var skill_factor: float = clampf((accuracy + control) / 200.0, 0.1, 1.0)
+	var reach: float = (24.0 + power * 2.4) if not putting else (18.0 + accuracy * 0.36)
+	var forward: float = minf(remaining, reach * rng.randf_range(0.75, 1.08))
+	var direction: Vector2 = (basket - lie).normalized()
+	var perpendicular: Vector2 = Vector2(-direction.y, direction.x)
+	var dispersion: float = (1.0 - skill_factor) * (5.0 if putting else 45.0)
+	var lateral: float = rng.randf_range(-dispersion, dispersion)
+	var landing: Vector2 = lie + direction * forward + perpendicular * lateral
+	var sunk: bool = false
+	if putting:
+		var putt_chance: float = clampf(0.12 + accuracy / 120.0 - remaining / 140.0, 0.08, 0.94)
+		sunk = rng.randf() < putt_chance
+	elif remaining <= reach and skill_factor > 0.85:
+		sunk = rng.randf() < 0.015
+	if sunk:
+		landing = basket
+	visitor["strokes"] = int(visitor["strokes"]) + 1
+	visitor["disc_position"] = landing
+	visitor["last_throw"] = "Putt" if putting else "Drive / approach"
+	if sunk or int(visitor["strokes"]) >= MAX_STROKES:
+		visitor["disc_position"] = basket
+		visitor["wait"] = 1.2
+		visitor["stage"] = "walking_to_basket"
+		set_destination(visitor, basket)
+	else:
+		visitor["stage"] = "walking_to_lie"
+		visitor["wait"] = THROW_INTERVAL
+		set_destination(visitor, landing)
+	if selected_id == int(visitor["id"]) and profile_panel.visible:
+		show_profile(selected_id)
+
+func finish_hole(visitor: Dictionary) -> void:
+	var holes: Array = visitor["holes"]
+	var cursor: int = int(visitor["hole_cursor"])
+	var hole_index: int = int(holes[cursor])
+	var person: Dictionary = people[int(visitor["id"])]
+	var strokes: int = int(visitor["strokes"])
+	var par: int = course_manager.calculate_par(course_manager.calculate_hole_distance(hole_index, property_manager.CELL_SIZE))
+	visitor["round_scores"][str(hole_index + 1)] = {"strokes": strokes, "par": par}
+	person["holes_visited"] = int(person["holes_visited"]) + 1
+	visitor["hole_cursor"] = cursor + 1
+	if cursor + 1 < holes.size():
+		visitor["stage"] = "tee"
+		set_destination(visitor, hole_local(int(holes[cursor + 1]), "tee"))
+	else:
+		visitor["stage"] = "exiting"
+		set_destination(visitor, get_entrance_local())
+
 func advance_stage(visitor: Dictionary) -> void:
 	var holes: Array = visitor["holes"]
 	var cursor: int = int(visitor["hole_cursor"])
-	if str(visitor["stage"]) == "tee":
-		visitor["stage"] = "basket"
-		visitor["wait"] = 2.0
-		set_destination(visitor, hole_local(int(holes[cursor]), "basket"))
-	elif str(visitor["stage"]) == "basket":
-		var person: Dictionary = people[int(visitor["id"])]
-		person["holes_visited"] = int(person["holes_visited"]) + 1
-		visitor["hole_cursor"] = cursor + 1
-		if cursor + 1 < holes.size():
-			visitor["stage"] = "tee"
-			set_destination(visitor, hole_local(int(holes[cursor + 1]), "tee"))
-		else:
-			visitor["stage"] = "exiting"
-			set_destination(visitor, get_entrance_local())
-	else:
+	var stage: String = str(visitor["stage"])
+	if stage == "tee":
+		visitor["strokes"] = 0
+		visitor["disc_position"] = hole_local(int(holes[cursor]), "tee")
+		visitor["stage"] = "throwing"
+		visitor["wait"] = 1.5
+	elif stage == "walking_to_lie":
+		visitor["stage"] = "throwing"
+		visitor["wait"] = 0.6
+	elif stage == "walking_to_basket":
+		finish_hole(visitor)
+	elif stage == "exiting":
 		var person: Dictionary = people[int(visitor["id"])]
 		person["visits"] = int(person["visits"]) + 1
 		var feedback: String = "Walking routes were easy to follow."
 		if float(visitor["off_path"]) > float(visitor["walked"]) * 0.55:
 			feedback = "The course needs better walking paths between holes."
 		person["feedback"].append(feedback)
-		person["history"].append({"holes": holes.size(), "feedback": feedback})
+		var scores: Dictionary = visitor["round_scores"]
+		var total_strokes: int = 0
+		var total_par: int = 0
+		for result_value in scores.values():
+			var result: Dictionary = result_value
+			total_strokes += int(result["strokes"])
+			total_par += int(result["par"])
+		person["history"].append({"holes": scores.size(), "scores": scores.duplicate(true), "strokes": total_strokes, "par": total_par, "feedback": feedback})
 		visitors.erase(visitor)
 		visitor_departed.emit(int(person["id"]))
 		save_people()
@@ -250,6 +326,10 @@ func _draw() -> void:
 		var color: Color = PALETTE[int(person["appearance"]) % PALETTE.size()]
 		draw_circle(world + Vector2(2, 5), 7.0, Color(0, 0, 0, 0.22))
 		draw_circle(world, 6.5, color)
+		if str(visitor["stage"]) in ["throwing", "walking_to_lie", "walking_to_basket"]:
+			var disc_world: Vector2 = property_manager.property_local_to_world(visitor["disc_position"])
+			draw_circle(disc_world, 3.5, Color(0.98, 0.83, 0.23, 1.0))
+			draw_arc(disc_world, 5.5, 0.0, TAU, 12, Color(0.13, 0.16, 0.12, 0.8), 1.0)
 		draw_circle(world + Vector2(0, -7), 4.5, Color("efc49d"))
 		draw_arc(world, 10.0, 0.0, TAU, 16, Color(1.0, 1.0, 1.0, 0.8) if selected_id == int(person["id"]) else Color.TRANSPARENT, 1.8)
 
@@ -292,6 +372,15 @@ func show_profile(person_id: int) -> void:
 	var membership: String = "Unregistered" if int(person["membership_number"]) < 0 else "WDGA #%d" % int(person["membership_number"])
 	var skills: Dictionary = person["skills"]
 	profile_label.text = "%s  •  Age %d\n%s  •  %s\n%s-handed  •  %s\n\nPower %d   Accuracy %d\nPutting %d   Control %d\nCourse IQ %d   Composure %d\n\nVisits: %d   Holes visited: %d" % [str(person["name"]), int(person["age"]), membership, str(person["classification"]), str(person["handedness"]), str(person["personality"]), int(skills["power"]), int(skills["accuracy"]), int(skills["putting"]), int(skills["control"]), int(skills["course_iq"]), int(skills["composure"]), int(person["visits"]), int(person["holes_visited"])]
+	for visitor_value in visitors:
+		var active: Dictionary = visitor_value
+		if int(active["id"]) == person_id and str(active["stage"]) in ["throwing", "walking_to_lie", "walking_to_basket"]:
+			profile_label.text += "\n\nHole %d | Strokes: %d\n%s" % [int(active["holes"][int(active["hole_cursor"])]) + 1, int(active["strokes"]), str(active["last_throw"])]
+			break
+	if not person["history"].is_empty():
+		var last_round: Dictionary = person["history"][-1]
+		if last_round.has("strokes"):
+			profile_label.text += "\nLast round: %d strokes / Par %d" % [int(last_round["strokes"]), int(last_round["par"])]
 	if not person["feedback"].is_empty():
 		profile_label.text += "\n\nLast feedback: " + str(person["feedback"][-1])
 	profile_panel.show()
