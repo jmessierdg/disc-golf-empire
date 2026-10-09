@@ -39,8 +39,8 @@ const COURSE_UI_SCRIPT = preload(
 )
 
 const PATH_MANAGER_SCRIPT = preload("res://path_manager.gd")
-const GOLFER_MANAGER_SCRIPT = preload("res://golfer_manager.gd")
-const HUD_MANAGER_SCRIPT = preload("res://hud_manager.gd")
+const GOLFER_MANAGER_PATH := "res://golfer_manager.gd"
+const HUD_MANAGER_PATH := "res://hud_manager.gd"
 
 const RADIO_MANAGER_SCRIPT = preload(
 	"res://radio_manager.gd"
@@ -285,10 +285,18 @@ func create_components() -> void:
 	course_ui.set_walkway_manager(path_manager)
 
 	# Persistent visitors draw independently of retained terrain layers.
-	golfer_manager = GOLFER_MANAGER_SCRIPT.new()
-	golfer_manager.name = "GolferManager"
-	add_child(golfer_manager)
-	golfer_manager.setup(property_manager, course_manager, path_manager)
+	# Golfer simulation is optional at boot; it must not prevent the park from loading.
+	if ResourceLoader.exists(GOLFER_MANAGER_PATH):
+		var golfer_script = load(GOLFER_MANAGER_PATH)
+		if golfer_script != null and golfer_script.can_instantiate():
+			golfer_manager = golfer_script.new()
+			golfer_manager.name = "GolferManager"
+			add_child(golfer_manager)
+			golfer_manager.setup(property_manager, course_manager, path_manager)
+		else:
+			push_warning("Golfer script failed to load; park remains playable.")
+	else:
+		push_warning("Golfer script missing; park remains playable.")
 
 	# Disc Golf Empire Radio runs independently of gameplay UI.
 	radio_manager = RADIO_MANAGER_SCRIPT.new()
@@ -296,10 +304,19 @@ func create_components() -> void:
 	add_child(radio_manager)
 
 	# Mobile-first management HUD; existing gameplay UI remains functional.
-	hud_manager = HUD_MANAGER_SCRIPT.new()
-	hud_manager.name = "HUDManager"
-	add_child(hud_manager)
-	hud_manager.setup(course_ui, course_manager, economy_manager, job_manager, golfer_manager, radio_manager, camera_controller)
+	# Load HUD after the working CourseUI is initialized.
+	# If the optional HUD cannot load, the original controls remain available.
+	if ResourceLoader.exists(HUD_MANAGER_PATH):
+		var hud_script = load(HUD_MANAGER_PATH)
+		if hud_script != null and hud_script.can_instantiate():
+			hud_manager = hud_script.new()
+			hud_manager.name = "HUDManager"
+			add_child(hud_manager)
+			hud_manager.setup(course_ui, course_manager, economy_manager, job_manager, golfer_manager, radio_manager, camera_controller)
+		else:
+			push_warning("HUD failed to load; original CourseUI remains available.")
+	else:
+		push_warning("HUD script missing; original CourseUI remains available.")
 
 
 # ==================================================
