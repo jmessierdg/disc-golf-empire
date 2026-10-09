@@ -40,7 +40,6 @@ const COURSE_UI_SCRIPT = preload(
 
 const PATH_MANAGER_SCRIPT = preload("res://path_manager.gd")
 const GOLFER_MANAGER_SCRIPT = preload("res://golfer_manager.gd")
-const HUD_MANAGER_SCRIPT = preload("res://hud_manager.gd")
 
 const RADIO_MANAGER_SCRIPT = preload(
 	"res://radio_manager.gd"
@@ -62,7 +61,6 @@ var course_ui
 var radio_manager
 var path_manager
 var golfer_manager
-var hud_manager
 
 
 # ==================================================
@@ -294,12 +292,6 @@ func create_components() -> void:
 	radio_manager = RADIO_MANAGER_SCRIPT.new()
 	radio_manager.name = "RadioManager"
 	add_child(radio_manager)
-
-	# Mobile-first management HUD; existing gameplay UI remains functional.
-	hud_manager = HUD_MANAGER_SCRIPT.new()
-	hud_manager.name = "HUDManager"
-	add_child(hud_manager)
-	hud_manager.setup(course_ui, course_manager, economy_manager, job_manager, golfer_manager, radio_manager, camera_controller)
 
 
 # ==================================================
