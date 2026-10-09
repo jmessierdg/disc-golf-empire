@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 31: skill-scaled throws and animated disc flight.
+# Disc Golf Empire - Update 32: tee queues, lie-order play, flight-line aiming and visible altitude.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -22,7 +22,8 @@ const FEET_PER_PIXEL := 15.0 / 32.0
 const PUTT_RANGE_PIXELS := 42.0
 const FLIGHT_MIN_SECONDS := 0.65
 const FLIGHT_MAX_SECONDS := 2.3
-const FLIGHT_ARC_PIXELS := 36.0
+const FLIGHT_ARC_PIXELS := 82.0
+const FLIGHT_SHADOW_ALPHA := 0.26
 const FLIGHT_DISC_RADIUS := 4.0
 const SAVE_PATH := "user://dge_people_v1.json"
 const FIRST_NAMES := ["Ethan", "Morgan", "Avery", "Taylor", "Riley", "Jordan", "Casey", "Alex", "Jamie", "Quinn", "Parker", "Rowan", "Sam", "Cameron"]
@@ -43,6 +44,8 @@ var next_group_id: int = 1
 var last_feedback: String = ""
 # One active throw per twosome; tracks whose turn it is on the current hole.
 var group_turns: Dictionary = {}
+# One active group per hole; queued groups may wait at the tee.
+var hole_owners: Dictionary = {}
 # All gameplay destinations use PROPERTY-LOCAL coordinates.
 var course_locations: Dictionary = {}
 const DEBUG_DESTINATIONS := false
@@ -147,20 +150,33 @@ func get_group_turn(visitor: Dictionary) -> int:
 
 func may_throw(visitor: Dictionary) -> bool:
 	var partner: Dictionary = get_partner(visitor)
-	if partner.is_empty():
+	if partner.is_empty() or int(partner["hole_cursor"]) != int(visitor["hole_cursor"]):
 		return false
-	if int(partner["hole_cursor"]) != int(visitor["hole_cursor"]):
+	var hole_index: int = int(visitor["holes"][int(visitor["hole_cursor"])])
+	if int(hole_owners.get(hole_index, -1)) != int(visitor["group_id"]):
 		return false
-	# Keep only one disc airborne per twosome.
 	if str(partner["stage"]) == "disc_flying":
 		return false
-	# On a new hole, both players must be on the tee before tee-off.
-	if int(visitor["strokes"]) == 0 and int(partner["strokes"]) == 0:
-		if not bool(visitor.get("tee_ready", false)) or not bool(partner.get("tee_ready", false)):
-			return false
-	# One golfer throws, then the other gets the next opportunity.
+	if int(visitor["strokes"]) == 0 and (not bool(visitor.get("tee_ready", false)) or not bool(partner.get("tee_ready", false))):
+		return false
+	# Both tee shots are taken before anyone advances to the fairway.
+	if int(visitor["strokes"]) > 0 and int(partner["strokes"]) == 0:
+		return false
+	if int(visitor["strokes"]) == 0 and int(partner["strokes"]) > 0:
+		return true
+	# After tee-off, the player farther from the basket throws next,
+	# provided they have reached their lie and are ready.
 	if str(partner["stage"]) in ["waiting_at_basket", "walking_to_basket"]:
 		return true
+	if str(partner["stage"]) in ["throwing", "walking_to_lie"]:
+		var basket: Vector2 = hole_local(hole_index, "basket")
+		var own_distance: float = visitor["disc_position"].distance_to(basket)
+		var partner_distance: float = partner["disc_position"].distance_to(basket)
+		if absf(own_distance - partner_distance) > 2.0:
+			if own_distance < partner_distance and str(partner["stage"]) == "throwing":
+				return false
+			if own_distance > partner_distance:
+				return true
 	return get_group_turn(visitor) == int(visitor["id"])
 
 
@@ -183,6 +199,9 @@ func move_group_to_next_hole(visitor: Dictionary) -> void:
 		return
 	var cursor: int = int(visitor["hole_cursor"])
 	group_turns.erase(int(visitor["group_id"]))
+	var completed_hole: int = int(visitor["holes"][cursor])
+	if int(hole_owners.get(completed_hole, -1)) == int(visitor["group_id"]):
+		hole_owners.erase(completed_hole)
 	for member in [visitor, partner]:
 		member["tee_ready"] = false
 		member["strokes"] = 0
@@ -374,13 +393,15 @@ func _process(delta: float) -> void:
 			"waiting_at_tee":
 				var partner: Dictionary = get_partner(visitor)
 				if bool(visitor.get("checked_in", false)) and not partner.is_empty() and bool(partner.get("checked_in", false)) and str(partner["stage"]) == "waiting_at_tee":
-					# Both arrive first. Set both ready together so iteration
-					# order cannot let one player tee off prematurely.
-					for member in [visitor, partner]:
-						member["tee_ready"] = true
-						member["disc_position"] = hole_local(int(member["holes"][int(member["hole_cursor"])]), "tee")
-						member["stage"] = "throwing"
-						member["wait"] = TEE_PREPARE_SECONDS
+					var hole_index: int = int(visitor["holes"][int(visitor["hole_cursor"])])
+					var owner: int = int(hole_owners.get(hole_index, -1))
+					if owner == -1 or owner == int(visitor["group_id"]):
+						hole_owners[hole_index] = int(visitor["group_id"])
+						for member in [visitor, partner]:
+							member["tee_ready"] = true
+							member["disc_position"] = hole_local(hole_index, "tee")
+							member["stage"] = "throwing"
+							member["wait"] = TEE_PREPARE_SECONDS
 			"waiting_at_basket":
 				if group_ready_for_next_hole(visitor):
 					move_group_to_next_hole(visitor)
@@ -581,14 +602,18 @@ func perform_throw(visitor: Dictionary) -> void:
 	var drive_feet: float = 120.0 + power * 2.15
 	var max_reach: float = drive_feet / FEET_PER_PIXEL
 	var reach: float = max_reach if not putting else (18.0 + accuracy * 0.36)
-	var forward: float = minf(remaining, reach * rng.randf_range(0.78, 1.07))
+	var power_variation: float = lerpf(0.66, 0.92, control / 100.0)
+	var forward: float = minf(remaining, reach * rng.randf_range(power_variation, 1.05))
+	# Aim down the flight line (current lie -> basket), with a skill-based
+	# angular release error. Accuracy reduces the angle; control reduces
+	# power variation. Flight shape will be a separate later update.
 	var direction: Vector2 = (basket - lie).normalized()
 	if direction.length_squared() < 0.001:
 		direction = Vector2.RIGHT
-	var perpendicular: Vector2 = Vector2(-direction.y, direction.x)
-	var dispersion: float = (1.0 - skill_factor) * (6.0 if putting else 65.0)
-	var lateral: float = rng.randf_range(-dispersion, dispersion)
-	var landing: Vector2 = clamp_to_property(lie + direction * forward + perpendicular * lateral)
+	var max_error_degrees: float = (2.0 if putting else 17.0) * (1.0 - skill_factor) + 0.5
+	var release_error: float = deg_to_rad(rng.randf_range(-max_error_degrees, max_error_degrees))
+	var aimed_direction: Vector2 = direction.rotated(release_error)
+	var landing: Vector2 = clamp_to_property(lie + aimed_direction * forward)
 	if navigation_manager != null:
 		var landing_cell: Vector2i = property_manager.world_to_cell(landing)
 		var blocked: Dictionary = navigation_manager.build_navigation_blocked_cells(landing_cell, landing_cell)
@@ -638,7 +663,7 @@ func get_flight_visual(visitor: Dictionary) -> Vector2:
 	var start: Vector2 = visitor["flight_start"]
 	var finish: Vector2 = visitor["flight_end"]
 	var flat: Vector2 = start.lerp(finish, t)
-	var arc: float = sin(t * PI) * minf(FLIGHT_ARC_PIXELS, start.distance_to(finish) * 0.12)
+	var arc: float = sin(t * PI) * minf(FLIGHT_ARC_PIXELS, 14.0 + start.distance_to(finish) * 0.19)
 	return flat + Vector2(0.0, -arc)
 
 
@@ -719,7 +744,7 @@ func get_activity_label(stage: String) -> String:
 		"walking_to_checkin": return "Check-in"
 		"waiting_at_checkin": return "Checking in"
 		"walking_to_tee": return "To tee"
-		"waiting_at_tee": return "At tee"
+		"waiting_at_tee": return "Tee queue"
 		"throwing": return "Throwing"
 		"disc_flying": return "Disc flying"
 		"walking_to_lie": return "Retrieving"
@@ -765,7 +790,17 @@ func _draw() -> void:
 		if stage in ["throwing", "disc_flying", "walking_to_lie", "walking_to_basket"]:
 			var disc_local: Vector2 = get_flight_visual(visitor) if stage == "disc_flying" else visitor["disc_position"]
 			var disc_world: Vector2 = property_manager.property_local_to_world(disc_local)
-			draw_circle(disc_world + Vector2(1, 2), 4.5, Color(0, 0, 0, 0.24))
+			if stage == "disc_flying":
+				var duration: float = maxf(0.01, float(visitor["flight_duration"]))
+				var progress: float = clampf(float(visitor["flight_elapsed"]) / duration, 0.0, 1.0)
+				var ground_local: Vector2 = (visitor["flight_start"] as Vector2).lerp(visitor["flight_end"], progress)
+				var ground_world: Vector2 = property_manager.property_local_to_world(ground_local)
+				# Ground shadow anchors the disc to its real horizontal position.
+				draw_circle(ground_world + Vector2(2, 2), 4.0, Color(0, 0, 0, FLIGHT_SHADOW_ALPHA))
+				draw_line(ground_world, disc_world, Color(1.0, 0.91, 0.48, 0.17), 1.0)
+				draw_circle(disc_world, 7.0, Color(1.0, 0.87, 0.32, 0.18))
+			else:
+				draw_circle(disc_world + Vector2(1, 2), 4.5, Color(0, 0, 0, 0.24))
 			draw_circle(disc_world, FLIGHT_DISC_RADIUS, Color(0.98, 0.83, 0.23, 1.0))
 			draw_arc(disc_world, 5.5, 0.0, TAU, 12, Color(0.13, 0.16, 0.12, 0.8), 1.0)
 		# Restrict status labels to stationary interactions to reduce clutter.
