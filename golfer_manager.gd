@@ -1,3 +1,4 @@
+
 # Disc Golf Empire - Update 32: tee queues, lie-order play, flight-line aiming and visible altitude.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
