@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 33: Update 32 golfer behavior with clean airborne disc visuals.
+# Disc Golf Empire - Update 34: flight shapes and multi-hole progression safeguards.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -155,28 +155,30 @@ func may_throw(visitor: Dictionary) -> bool:
 	var hole_index: int = int(visitor["holes"][int(visitor["hole_cursor"])])
 	if int(hole_owners.get(hole_index, -1)) != int(visitor["group_id"]):
 		return false
-	if str(partner["stage"]) == "disc_flying":
+	var partner_stage: String = str(partner["stage"])
+	if partner_stage == "disc_flying":
 		return false
-	if int(visitor["strokes"]) == 0 and (not bool(visitor.get("tee_ready", false)) or not bool(partner.get("tee_ready", false))):
+	if int(visitor["strokes"]) == 0:
+		if not bool(visitor.get("tee_ready", false)) or not bool(partner.get("tee_ready", false)):
+			return false
+		# Complete both tee shots before fairway throws.
+		if int(partner["strokes"]) > 0:
+			return true
+		return get_group_turn(visitor) == int(visitor["id"])
+	if int(partner["strokes"]) == 0:
 		return false
-	# Both tee shots are taken before anyone advances to the fairway.
-	if int(visitor["strokes"]) > 0 and int(partner["strokes"]) == 0:
-		return false
-	if int(visitor["strokes"]) == 0 and int(partner["strokes"]) > 0:
+	if partner_stage in ["waiting_at_basket", "walking_to_basket"]:
 		return true
-	# After tee-off, the player farther from the basket throws next,
-	# provided they have reached their lie and are ready.
-	if str(partner["stage"]) in ["waiting_at_basket", "walking_to_basket"]:
+	# A golfer at the lie may throw while the partner walks, but only
+	# if they are farther out or their partner is not ready to throw.
+	if partner_stage == "walking_to_lie":
 		return true
-	if str(partner["stage"]) in ["throwing", "walking_to_lie"]:
+	if partner_stage == "throwing":
 		var basket: Vector2 = hole_local(hole_index, "basket")
-		var own_distance: float = visitor["disc_position"].distance_to(basket)
-		var partner_distance: float = partner["disc_position"].distance_to(basket)
-		if absf(own_distance - partner_distance) > 2.0:
-			if own_distance < partner_distance and str(partner["stage"]) == "throwing":
-				return false
-			if own_distance > partner_distance:
-				return true
+		var own_distance: float = (visitor["disc_position"] as Vector2).distance_to(basket)
+		var other_distance: float = (partner["disc_position"] as Vector2).distance_to(basket)
+		if absf(own_distance - other_distance) > 1.0:
+			return own_distance > other_distance
 	return get_group_turn(visitor) == int(visitor["id"])
 
 
@@ -198,6 +200,16 @@ func move_group_to_next_hole(visitor: Dictionary) -> void:
 	if partner.is_empty():
 		return
 	var cursor: int = int(visitor["hole_cursor"])
+	# Pick up newly completed holes at the transition, not just at arrival.
+	var latest_holes: Array = completed_holes()
+	for member in [visitor, partner]:
+		var itinerary: Array = member["holes"]
+		for candidate in latest_holes:
+			if not itinerary.has(candidate):
+				itinerary.append(candidate)
+		itinerary.sort()
+		member["holes"] = itinerary
+	refresh_course_locations()
 	group_turns.erase(int(visitor["group_id"]))
 	var completed_hole: int = int(visitor["holes"][cursor])
 	if int(hole_owners.get(completed_hole, -1)) == int(visitor["group_id"]):
@@ -338,7 +350,8 @@ func spawn_visitor() -> void:
 			"round_recorded": false, "destination": slot, "destination_kind": "parking",
 			"tee_ready": false, "shot_pause": 0.0, "checked_in": false,
 			"flight_start": start, "flight_end": start, "flight_elapsed": 0.0,
-			"flight_duration": 0.0, "flight_sunk": false
+			"flight_duration": 0.0, "flight_sunk": false,
+			"flight_curve": 0.0, "flight_turn": 0.0, "flight_fade": 0.0
 		}
 		pair.append(visitor)
 	pair[0]["partner_id"] = int(pair[1]["id"])
@@ -631,6 +644,16 @@ func perform_throw(visitor: Dictionary) -> void:
 		landing = basket
 	visitor["strokes"] = int(visitor["strokes"]) + 1
 	visitor["last_throw"] = "Putt" if putting else ("Drive" if int(visitor["strokes"]) == 1 else "Approach")
+	# Shape varies by handedness, skill, and throw type. This is a
+	# deterministic visual flight curve, not full disc aerodynamics.
+	var hand_sign: float = -1.0 if str(person["handedness"]) == "Left" else 1.0
+	var shape_choice: int = rng.randi_range(0, 2)
+	var release_shape: float = [-1.0, 0.0, 1.0][shape_choice]
+	var execution: float = (1.0 - skill_factor) * rng.randf_range(-0.65, 0.65)
+	var scale: float = minf(1.0, lie.distance_to(landing) / 350.0)
+	visitor["flight_curve"] = (release_shape + execution) * 32.0 * scale * hand_sign
+	visitor["flight_turn"] = -20.0 * scale * hand_sign
+	visitor["flight_fade"] = 27.0 * scale * hand_sign
 	visitor["flight_start"] = lie
 	visitor["flight_end"] = landing
 	visitor["flight_elapsed"] = 0.0
@@ -663,8 +686,18 @@ func get_flight_visual(visitor: Dictionary) -> Vector2:
 	var start: Vector2 = visitor["flight_start"]
 	var finish: Vector2 = visitor["flight_end"]
 	var flat: Vector2 = start.lerp(finish, t)
-	var arc: float = sin(t * PI) * minf(FLIGHT_ARC_PIXELS, 14.0 + start.distance_to(finish) * 0.19)
-	return flat + Vector2(0.0, -arc)
+	var heading: Vector2 = (finish - start).normalized()
+	var sideways: Vector2 = Vector2(-heading.y, heading.x)
+	# Turn peaks early, fade peaks late, and release shape affects the
+	# entire trajectory. Each contribution is zero at takeoff and landing.
+	var envelope: float = sin(PI * t)
+	var early: float = envelope * (1.0 - t)
+	var late: float = envelope * t
+	var offset: float = float(visitor.get("flight_curve", 0.0)) * envelope
+	offset += float(visitor.get("flight_turn", 0.0)) * early
+	offset += float(visitor.get("flight_fade", 0.0)) * late
+	var arc: float = envelope * minf(FLIGHT_ARC_PIXELS, 14.0 + start.distance_to(finish) * 0.19)
+	return flat + sideways * offset + Vector2(0.0, -arc)
 
 
 func finish_hole(visitor: Dictionary) -> void:
