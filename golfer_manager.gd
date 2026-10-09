@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 38 Hotfix: intended fairway shot planning and path-preferring walking.
+# Disc Golf Empire - Update 39: intended fairway shot planning and path-preferring walking.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -703,6 +703,30 @@ func advance_visitor(visitor: Dictionary, delta: float) -> bool:
 # Distances are property-local pixels; 32 px represents 15 real feet.
 # A recreational player's drive typically travels farther than the old 24-264 px range.
 # This is a gameplay approximation, not a full aerodynamic physics simulation.
+func find_tree_contact(start: Vector2, finish: Vector2, flight_height: float) -> Dictionary:
+	# Trees are property-local, like all shot coordinates. Low shots
+	# can clip trunks; higher shots still risk the canopy.
+	var delta: Vector2 = finish - start
+	var distance: float = delta.length()
+	if distance < 0.1:
+		return {}
+	var best_fraction: float = 2.0
+	for tree_value in property_manager.trees:
+		var tree: Vector2 = tree_value
+		var fraction: float = clampf((tree - start).dot(delta) / maxf(delta.length_squared(), 0.001), 0.0, 1.0)
+		if fraction <= 0.02 or fraction >= 0.98:
+			continue
+		var closest: Vector2 = start.lerp(finish, fraction)
+		var lateral: float = tree.distance_to(closest)
+		var height: float = sin(PI * fraction) * flight_height
+		var collision_radius: float = 8.0 if height > 26.0 else 13.0
+		if lateral <= collision_radius and fraction < best_fraction:
+			best_fraction = fraction
+	if best_fraction <= 1.0:
+		return {"fraction": best_fraction, "point": start.lerp(finish, maxf(0.04, best_fraction - 0.025))}
+	return {}
+
+
 func perform_throw(visitor: Dictionary) -> void:
 	var holes: Array = visitor["holes"]
 	var hole_number: int = int(holes[int(visitor["hole_cursor"])])
@@ -744,6 +768,13 @@ func perform_throw(visitor: Dictionary) -> void:
 	var release_error: float = deg_to_rad(rng.randf_range(-max_error_degrees, max_error_degrees))
 	var aimed_direction: Vector2 = direction.rotated(release_error)
 	var landing: Vector2 = clamp_to_property(lie + aimed_direction * forward)
+	# The intended route is guidance, not a guarantee: trees can
+	# interrupt a poorly chosen or poorly executed shot.
+	var intended_distance: float = lie.distance_to(landing)
+	var estimated_height: float = minf(FLIGHT_ARC_PIXELS, 14.0 + intended_distance * 0.19)
+	var contact: Dictionary = {} if putting else find_tree_contact(lie, landing, estimated_height)
+	if not contact.is_empty():
+		landing = clamp_to_property(contact["point"])
 	if navigation_manager != null:
 		var landing_cell: Vector2i = property_manager.world_to_cell(landing)
 		var blocked: Dictionary = navigation_manager.build_navigation_blocked_cells(landing_cell, landing_cell)
@@ -760,7 +791,7 @@ func perform_throw(visitor: Dictionary) -> void:
 	if sunk:
 		landing = basket
 	visitor["strokes"] = int(visitor["strokes"]) + 1
-	visitor["last_throw"] = "Putt" if putting else ("Drive" if int(visitor["strokes"]) == 1 else "Approach")
+	visitor["last_throw"] = "Tree hit" if not contact.is_empty() else ("Putt" if putting else ("Drive" if int(visitor["strokes"]) == 1 else "Approach"))
 	# Shape varies by handedness, skill, and throw type. This is a
 	# deterministic visual flight curve, not full disc aerodynamics.
 	var hand_sign: float = -1.0 if str(person["handedness"]) == "Left" else 1.0
