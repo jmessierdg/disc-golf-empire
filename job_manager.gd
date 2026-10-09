@@ -421,6 +421,7 @@ func release_worker(worker: Dictionary) -> void:
 	worker["job_id"] = -1
 	worker["movement_path"] = []
 	worker["movement_index"] = 0
+	worker["return_target"] = get_maintenance_local_position()
 	clear_worker_travel_path(worker)
 	workers_changed.emit()
 
@@ -430,7 +431,6 @@ func finish_equipment_return(worker: Dictionary) -> void:
 	worker["equipment_type"] = ""
 	worker["state"] = WORKER_IDLE
 	worker["wander_wait"] = 0.0
-	worker["position"] = get_maintenance_local_position()
 	worker["movement_path"] = []
 	worker["movement_index"] = 0
 	workers_changed.emit()
@@ -512,11 +512,42 @@ func follow_worker_route(worker: Dictionary, delta: float) -> bool:
 
 
 func move_worker_to_facility(worker: Dictionary, delta: float) -> bool:
+	var home: Vector2 = get_maintenance_local_position()
+	# Never report a return completed just because a route was cleared.
+	if (worker["position"] as Vector2).distance_to(home) < 3.0:
+		worker["position"] = home
+		worker["movement_path"] = []
+		worker["movement_index"] = 0
+		return true
 	if worker.get("movement_path", []).is_empty():
-		if not set_worker_route(worker, get_maintenance_local_position()):
-			# No walkable route: remain stationary and retry later.
-			return false
-	return follow_worker_route(worker, delta)
+		if not set_worker_route(worker, home):
+			# If the precise shop entry is blocked, find a reachable place
+			# immediately outside it, instead of freezing on the job site.
+			var home_cell: Vector2i = get_worker_cell(home)
+			var start_cell: Vector2i = get_worker_cell(worker["position"])
+			var blocked: Dictionary = build_navigation_blocked_cells(start_cell, home_cell)
+			var found: bool = false
+			for radius in range(1, 7):
+				if found:
+					break
+				for dy in range(-radius, radius + 1):
+					if found:
+						break
+					for dx in range(-radius, radius + 1):
+						var candidate: Vector2i = home_cell + Vector2i(dx, dy)
+						if not property_manager.is_valid_cell(candidate.x, candidate.y) or blocked.has(candidate):
+							continue
+						if not find_navigation_path(start_cell, candidate).is_empty():
+							found = set_worker_route(worker, get_cell_center_local(candidate))
+							if found:
+								break
+			if not found:
+				return false
+	var reached: bool = follow_worker_route(worker, delta)
+	if reached:
+		worker["movement_path"] = []
+		worker["movement_index"] = 0
+	return reached
 
 
 func process_idle_wander(worker: Dictionary, delta: float) -> void:
