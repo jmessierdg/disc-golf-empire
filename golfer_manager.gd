@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 35: pronounced curves, group lie etiquette, throw run-up.
+# Disc Golf Empire - Update 36: shot-style decisions and separated group waiting positions.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -20,6 +20,12 @@ const THROW_INTERVAL := 1.6
 const MAX_STROKES := 12
 const FEET_PER_PIXEL := 15.0 / 32.0
 const PUTT_RANGE_PIXELS := 42.0
+const STANDSTILL_BASE_FEET := 95.0
+const STANDSTILL_MIN_FEET := 55.0
+const STANDSTILL_MAX_FEET := 140.0
+const STANDSTILL_SECONDS := 0.45
+const RUNUP_SECONDS := 1.05
+const GROUP_WAIT_RADIUS := 25.0
 const FLIGHT_MIN_SECONDS := 0.65
 const FLIGHT_MAX_SECONDS := 2.3
 const FLIGHT_ARC_PIXELS := 82.0
@@ -203,13 +209,29 @@ func coordinate_group_lies() -> void:
 		elif second_stage == "waiting_at_basket":
 			shooter = first
 		var lie: Vector2 = shooter["disc_position"]
+		var away: Vector2 = (lie - basket).normalized()
+		if away.length_squared() < 0.001:
+			away = Vector2.DOWN
+		var side: Vector2 = Vector2(-away.y, away.x)
+		var waiting_index: int = 0
 		for member in [first, partner]:
 			if str(member["stage"]) == "waiting_at_basket":
 				continue
+			var is_shooter: bool = int(member["id"]) == int(shooter["id"])
 			member["lie_ready"] = false
-			member["active_thrower"] = int(member["id"]) == int(shooter["id"])
+			member["active_thrower"] = is_shooter
 			member["stage"] = "walking_group_lie"
-			set_destination(member, lie)
+			var destination: Vector2 = lie
+			if not is_shooter:
+				# Semicircular spectator positions behind the lie. Slot-based
+				# offsets remain unique when groups expand beyond two players.
+				var slot: int = waiting_index
+				var side_sign: float = -1.0 if slot % 2 == 0 else 1.0
+				var rank: int = int(slot / 2)
+				var angle: float = deg_to_rad(28.0 + float(rank) * 15.0)
+				destination = lie + (away * cos(angle) + side * sin(angle) * side_sign) * (GROUP_WAIT_RADIUS + float(rank) * 10.0)
+				waiting_index += 1
+			set_destination(member, destination)
 
 
 func group_ready_for_next_hole(visitor: Dictionary) -> bool:
@@ -375,7 +397,9 @@ func spawn_visitor() -> void:
 			"tee_ready": false, "shot_pause": 0.0, "checked_in": false,
 			"flight_start": start, "flight_end": start, "flight_elapsed": 0.0,
 			"flight_duration": 0.0, "flight_sunk": false,
-			"flight_curve": 0.0, "flight_turn": 0.0, "flight_fade": 0.0
+			"flight_curve": 0.0, "flight_turn": 0.0, "flight_fade": 0.0,
+			"shot_style": "Standstill", "shot_animation_total": 0.0,
+			"lie_ready": false, "active_thrower": false
 		}
 		pair.append(visitor)
 	pair[0]["partner_id"] = int(pair[1]["id"])
@@ -471,9 +495,17 @@ func _process(delta: float) -> void:
 					set_destination(visitor, hole_local(int(visitor["holes"][int(visitor["hole_cursor"])]), "tee"))
 			"throwing":
 				if may_throw(visitor):
-					visitor["stage"] = "run_up"
-					visitor["wait"] = 0.7
-			"run_up":
+					var hole_index: int = int(visitor["holes"][int(visitor["hole_cursor"])])
+					var distance_feet: float = (visitor["disc_position"] as Vector2).distance_to(hole_local(hole_index, "basket")) * FEET_PER_PIXEL
+					var golfer: Dictionary = people[int(visitor["id"])]
+					var skills: Dictionary = golfer["skills"]
+					var standstill_range: float = clampf(STANDSTILL_BASE_FEET + (float(skills["control"]) - 50.0) * 0.5, STANDSTILL_MIN_FEET, STANDSTILL_MAX_FEET)
+					var standstill: bool = distance_feet <= standstill_range
+					visitor["shot_style"] = "Standstill" if standstill else "Run-up"
+					visitor["stage"] = "standstill" if standstill else "run_up"
+					visitor["shot_animation_total"] = STANDSTILL_SECONDS if standstill else RUNUP_SECONDS
+					visitor["wait"] = float(visitor["shot_animation_total"])
+			"standstill", "run_up":
 				perform_throw(visitor)
 				finish_throw_turn(visitor)
 			"disc_flying":
@@ -821,6 +853,7 @@ func get_activity_label(stage: String) -> String:
 		"waiting_at_tee": return "Tee queue"
 		"throwing": return "Preparing"
 		"run_up": return "Run-up"
+		"standstill": return "Standstill"
 		"waiting_group": return "Waiting for lie"
 		"waiting_group_lie": return "At lie"
 		"walking_group_lie": return "Walking as group"
@@ -860,18 +893,26 @@ func _draw() -> void:
 		var moving: bool = stage.begins_with("walking_")
 		var bob: float = sin(visual_time * 11.0 + float(id)) * 1.1 if moving else 0.0
 		var body: Vector2 = world + Vector2(0.0, bob)
-		if stage == "run_up":
-			# Short animated approach without changing the gameplay lie.
-			var heading: Vector2 = ((visitor["flight_end"] as Vector2) - (visitor["flight_start"] as Vector2)).normalized()
+		if stage in ["run_up", "standstill"]:
+			var current_hole: int = int(visitor["holes"][int(visitor["hole_cursor"])])
+			var basket: Vector2 = hole_local(current_hole, "basket")
+			var lie: Vector2 = visitor["disc_position"]
+			var heading: Vector2 = (basket - lie).normalized()
 			if heading.length_squared() < 0.01:
 				heading = Vector2.RIGHT
-			body += heading * (sin(visual_time * 15.0) * 5.0)
+			var total: float = maxf(0.01, float(visitor.get("shot_animation_total", 1.0)))
+			var progress: float = 1.0 - clampf(float(visitor["wait"]) / total, 0.0, 1.0)
+			if stage == "run_up":
+				body += heading * (-16.0 * (1.0 - progress))
+				body += Vector2(0.0, sin(progress * PI * 5.0) * 1.6)
+			else:
+				body += heading * (-2.5 + progress * 2.5)
 		draw_ellipse_shadow(body)
 		# Small readable torso/head silhouette rather than a single dot.
 		draw_line(body + Vector2(0, -1), body + Vector2(0, 5), color.darkened(0.28), 5.0)
 		draw_circle(body + Vector2(0, -2), 5.5, color)
 		draw_circle(body + Vector2(0, -9), 4.0, Color("efc49d"))
-		if stage in ["throwing", "run_up", "disc_flying", "waiting_group", "waiting_group_lie", "walking_group_lie", "walking_to_lie", "walking_to_basket"]:
+		if stage in ["throwing", "standstill", "run_up", "disc_flying", "waiting_group", "waiting_group_lie", "walking_group_lie", "walking_to_lie", "walking_to_basket"]:
 			var disc_local: Vector2 = get_flight_visual(visitor) if stage == "disc_flying" else visitor["disc_position"]
 			var disc_world: Vector2 = property_manager.property_local_to_world(disc_local)
 			if stage == "disc_flying":
@@ -949,7 +990,7 @@ func show_profile(person_id: int) -> void:
 	profile_label.text = "%s  •  Age %d\n%s  •  %s\n%s-handed  •  %s\n\nPower %d   Accuracy %d\nPutting %d   Control %d\nCourse IQ %d   Composure %d\n\nVisits: %d   Holes visited: %d" % [str(person["name"]), int(person["age"]), membership, str(person["classification"]), str(person["handedness"]), str(person["personality"]), int(skills["power"]), int(skills["accuracy"]), int(skills["putting"]), int(skills["control"]), int(skills["course_iq"]), int(skills["composure"]), int(person["visits"]), int(person["holes_visited"])]
 	for visitor_value in visitors:
 		var active: Dictionary = visitor_value
-		if int(active["id"]) == person_id and str(active["stage"]) in ["throwing", "run_up", "disc_flying", "waiting_group", "waiting_group_lie", "walking_group_lie", "walking_to_lie", "walking_to_basket"]:
+		if int(active["id"]) == person_id and str(active["stage"]) in ["throwing", "standstill", "run_up", "disc_flying", "waiting_group", "waiting_group_lie", "walking_group_lie", "walking_to_lie", "walking_to_basket"]:
 			profile_label.text += "\n\nHole %d | Strokes: %d\n%s" % [int(active["holes"][int(active["hole_cursor"])]) + 1, int(active["strokes"]), str(active["last_throw"])]
 			break
 	if not person["history"].is_empty():
