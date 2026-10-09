@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 40: obstacle-aware shot planning and recovery.
+# Disc Golf Empire - Update 41: flight shape influences landing and tree contact.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -786,6 +786,28 @@ func find_tree_contact(start: Vector2, finish: Vector2, flight_height: float) ->
 	return {}
 
 
+func find_curved_tree_contact(start: Vector2, finish: Vector2, height: float, curve: float, turn: float, fade: float) -> Dictionary:
+	var direction: Vector2 = (finish - start).normalized()
+	if direction.length_squared() < 0.001:
+		return {}
+	var side: Vector2 = Vector2(-direction.y, direction.x)
+	var previous: Vector2 = start
+	var steps: int = maxi(12, int(ceilf(start.distance_to(finish) / 12.0)))
+	for step in range(1, steps + 1):
+		var t: float = float(step) / float(steps)
+		var envelope: float = sin(PI * t)
+		var offset: float = curve * envelope + turn * envelope * (1.0 - t) + fade * envelope * t
+		var current: Vector2 = start.lerp(finish, t) + side * offset
+		var altitude: float = envelope * height
+		var radius: float = 8.0 if altitude > 26.0 else 13.0
+		for tree_value in property_manager.trees:
+			var tree: Vector2 = tree_value
+			if tree.distance_to(current) <= radius:
+				return {"fraction": t, "point": previous}
+		previous = current
+	return {}
+
+
 func perform_throw(visitor: Dictionary) -> void:
 	var holes: Array = visitor["holes"]
 	var hole_number: int = int(holes[int(visitor["hole_cursor"])])
@@ -827,12 +849,28 @@ func perform_throw(visitor: Dictionary) -> void:
 	var max_error_degrees: float = (2.0 if putting else 17.0) * (1.0 - skill_factor) + 0.5
 	var release_error: float = deg_to_rad(rng.randf_range(-max_error_degrees, max_error_degrees))
 	var aimed_direction: Vector2 = direction.rotated(release_error)
-	var landing: Vector2 = clamp_to_property(lie + aimed_direction * forward)
-	# The intended route is guidance, not a guarantee: trees can
-	# interrupt a poorly chosen or poorly executed shot.
-	var intended_distance: float = lie.distance_to(landing)
-	var estimated_height: float = minf(FLIGHT_ARC_PIXELS, 14.0 + intended_distance * 0.19)
-	var contact: Dictionary = {} if putting else find_tree_contact(lie, landing, estimated_height)
+	var nominal_landing: Vector2 = clamp_to_property(lie + aimed_direction * forward)
+	# Shot shape is now part of the resulting landing position, rather
+	# than a decorative curve that always ends at the nominal target.
+	var hand_sign: float = -1.0 if str(person["handedness"]) == "Left" else 1.0
+	var shape_choice: int = rng.randi_range(0, 2)
+	var release_shape: float = [-1.0, 0.0, 1.0][shape_choice]
+	var execution: float = (1.0 - skill_factor) * rng.randf_range(-0.65, 0.65)
+	var scale: float = minf(1.0, lie.distance_to(nominal_landing) / 350.0)
+	var curve: float = (release_shape + execution) * 75.0 * scale * hand_sign
+	var turn: float = -43.0 * scale * hand_sign
+	var fade: float = 52.0 * scale * hand_sign
+	var landing: Vector2 = nominal_landing
+	if not putting:
+		var heading: Vector2 = (nominal_landing - lie).normalized()
+		var sideways: Vector2 = Vector2(-heading.y, heading.x)
+		# A portion of the release shape and late fade survives to ground.
+		# Cap sideways drift so this remains playable at the current scale.
+		var drift: float = clampf(curve * 0.22 + turn * 0.12 + fade * 0.48, -55.0, 55.0)
+		landing = clamp_to_property(nominal_landing + sideways * drift)
+	# Check trees against the curved trajectory, not a straight chord.
+	var estimated_height: float = minf(FLIGHT_ARC_PIXELS, 14.0 + lie.distance_to(landing) * 0.19)
+	var contact: Dictionary = {} if putting else find_curved_tree_contact(lie, landing, estimated_height, curve, turn, fade)
 	if not contact.is_empty():
 		landing = clamp_to_property(contact["point"])
 	if navigation_manager != null:
@@ -870,16 +908,12 @@ func perform_throw(visitor: Dictionary) -> void:
 	visitor["strokes"] = int(visitor["strokes"]) + 1
 	visitor["last_shot_target"] = shot_target
 	visitor["last_throw"] = "Tree hit" if not contact.is_empty() else ("Putt" if putting else ("Drive" if int(visitor["strokes"]) == 1 else "Approach"))
-	# Shape varies by handedness, skill, and throw type. This is a
-	# deterministic visual flight curve, not full disc aerodynamics.
-	var hand_sign: float = -1.0 if str(person["handedness"]) == "Left" else 1.0
-	var shape_choice: int = rng.randi_range(0, 2)
-	var release_shape: float = [-1.0, 0.0, 1.0][shape_choice]
-	var execution: float = (1.0 - skill_factor) * rng.randf_range(-0.65, 0.65)
-	var scale: float = minf(1.0, lie.distance_to(landing) / 350.0)
-	visitor["flight_curve"] = (release_shape + execution) * 75.0 * scale * hand_sign
-	visitor["flight_turn"] = -43.0 * scale * hand_sign
-	visitor["flight_fade"] = 52.0 * scale * hand_sign
+	# On contact the disc stops at the impact point; do not keep a
+	# pronounced sideways arc that could visually pass through the tree.
+	var contact_scale: float = 0.18 if not contact.is_empty() else 1.0
+	visitor["flight_curve"] = 0.0 if putting else curve * contact_scale
+	visitor["flight_turn"] = 0.0 if putting else turn * contact_scale
+	visitor["flight_fade"] = 0.0 if putting else fade * contact_scale
 	visitor["flight_start"] = lie
 	visitor["flight_end"] = landing
 	visitor["flight_elapsed"] = 0.0
