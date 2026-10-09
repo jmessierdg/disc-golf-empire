@@ -221,7 +221,7 @@ func _process(
 		var phase: String = str(worker.get("state", WORKER_IDLE))
 		if phase == WORKER_IDLE:
 			worker["observation_cooldown"] = maxf(0.0, float(worker.get("observation_cooldown", 0.0)) - delta)
-			process_idle_wander(worker, delta)
+			# Workers stay at the maintenance yard until assigned a job.
 			continue
 		if phase == WORKER_RETURNING:
 			if move_worker_to_facility(worker, delta):
@@ -429,7 +429,8 @@ func finish_equipment_return(worker: Dictionary) -> void:
 	release_equipment(str(worker.get("equipment_type", "")))
 	worker["equipment_type"] = ""
 	worker["state"] = WORKER_IDLE
-	worker["wander_wait"] = 2.0
+	worker["wander_wait"] = 0.0
+	worker["position"] = get_maintenance_local_position()
 	worker["movement_path"] = []
 	worker["movement_index"] = 0
 	workers_changed.emit()
