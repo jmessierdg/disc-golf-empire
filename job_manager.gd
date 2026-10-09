@@ -544,8 +544,6 @@ func move_worker_to_facility(worker: Dictionary, delta: float) -> bool:
 						if distance < best_distance:
 							best_distance = distance
 							best = candidate
-			if best.x >= 0:
-				break
 			if best.x < 0:
 				return false
 			destination = get_cell_center_local(best)
