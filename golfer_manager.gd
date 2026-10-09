@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 37: groups of 1-4, eight concurrent visitors.
+# Disc Golf Empire - Update 38: intended fairway shot planning and path-preferring walking.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -314,7 +314,8 @@ func refresh_course_locations() -> void:
 		var hole: Dictionary = course_manager.get_hole(i)
 		course_locations[i] = {
 			"tee": hole["tee"],
-			"basket": hole["basket"]
+			"basket": hole["basket"],
+			"path_points": hole.get("path_points", [])
 		}
 
 
@@ -527,20 +528,67 @@ func clamp_to_property(point: Vector2) -> Vector2:
 	return Vector2(clampf(point.x, inset, size.x - inset), clampf(point.y, inset, size.y - inset))
 
 func route_on_property(start: Vector2, finish: Vector2) -> Array:
-	# Temporary forced-play routing: walk straight to the real objective.
-	# Do not use worker A*: it was sending golfers on long detours.
-	# Both points are PROPERTY-LOCAL, never world coordinates.
 	var safe_finish: Vector2 = clamp_to_property(finish)
 	if start.distance_to(safe_finish) <= 1.0:
 		return [safe_finish]
+	# Built paths guide walking between facilities and holes. They do not
+	# constrain shots or the final approach to a player's lie.
+	if path_manager != null:
+		return route_via_walkways(start, safe_finish)
 	return [safe_finish]
+
+
+func get_intended_shot_target(hole_index: int, lie: Vector2, basket: Vector2, reach: float, course_iq: float, control: float) -> Vector2:
+	# Flight-path points are designer-authored fairway guidance, NOT a
+	# forced flight trajectory. Aim at the next meaningful waypoint.
+	var hole: Dictionary = course_manager.get_hole(hole_index)
+	var points: Array = [hole["tee"]]
+	for point_value in hole.get("path_points", []):
+		if point_value is Vector2:
+			points.append(point_value)
+	points.append(basket)
+	if points.size() <= 2:
+		return basket
+	# Find the closest point on the designed polyline and the segment
+	# containing it, so recovery shots can rejoin the fairway naturally.
+	var nearest_segment: int = 0
+	var nearest_t: float = 0.0
+	var nearest_distance: float = INF
+	for i in range(points.size() - 1):
+		var a: Vector2 = points[i]
+		var b: Vector2 = points[i + 1]
+		var line: Vector2 = b - a
+		var t: float = clampf((lie - a).dot(line) / maxf(line.length_squared(), 0.001), 0.0, 1.0)
+		var distance: float = lie.distance_squared_to(a.lerp(b, t))
+		if distance < nearest_distance:
+			nearest_distance = distance
+			nearest_segment = i
+			nearest_t = t
+	# Low course IQ generally aims for the next waypoint. Better players
+	# may reach farther along the intended fairway if a leg is short.
+	var target: Vector2 = points[nearest_segment + 1]
+	var available: float = maxf(0.0, reach * lerpf(0.66, 0.98, control / 100.0))
+	var segment_remaining: float = lie.distance_to(target)
+	if segment_remaining > available:
+		# The disc may land partway toward the next landing zone.
+		return target
+	if course_iq >= 72.0 and nearest_segment + 2 < points.size():
+		var next_point: Vector2 = points[nearest_segment + 2]
+		# Don't skip a sharp dogleg or route through trees just because
+		# the player has enough power to reach the basket.
+		var first_dir: Vector2 = (target - lie).normalized()
+		var second_dir: Vector2 = (next_point - target).normalized()
+		if first_dir.dot(second_dir) > 0.87 and lie.distance_to(next_point) <= available:
+			return next_point
+	return target
 
 
 func set_destination(visitor: Dictionary, destination: Vector2) -> void:
 	var safe_destination: Vector2 = clamp_to_property(destination)
 	visitor["destination"] = safe_destination
 	visitor["destination_kind"] = str(visitor.get("stage", ""))
-	var route: Array = route_on_property(visitor["position"], safe_destination)
+	var stage: String = str(visitor.get("stage", ""))
+	var route: Array = route_on_property(visitor["position"], safe_destination) if stage in ["walking_to_tee", "walking_to_checkin", "walking_to_car"] else [safe_destination]
 	if route.is_empty():
 		# No traversable route: remain in place instead of walking into nowhere.
 		visitor["blocked_goal"] = ("basket" if str(visitor["stage"]) == "walking_to_basket" else ("lie" if str(visitor["stage"]) == "walking_to_lie" else "tee"))
@@ -678,11 +726,14 @@ func perform_throw(visitor: Dictionary) -> void:
 	var max_reach: float = drive_feet / FEET_PER_PIXEL
 	var reach: float = max_reach if not putting else (18.0 + accuracy * 0.36)
 	var power_variation: float = lerpf(0.66, 0.92, control / 100.0)
-	var forward: float = minf(remaining, reach * rng.randf_range(power_variation, 1.05))
-	# Aim down the flight line (current lie -> basket), with a skill-based
+	var course_iq: float = float(skills.get("course_iq", 50))
+	var shot_target: Vector2 = basket if putting else get_intended_shot_target(hole_number, lie, basket, reach, course_iq, control)
+	var target_distance: float = lie.distance_to(shot_target)
+	var forward: float = minf(target_distance, reach * rng.randf_range(power_variation, 1.05))
+	# Aim toward the selected fairway waypoint, with a skill-based
 	# angular release error. Accuracy reduces the angle; control reduces
 	# power variation. Flight shape will be a separate later update.
-	var direction: Vector2 = (basket - lie).normalized()
+	var direction: Vector2 = (shot_target - lie).normalized()
 	if direction.length_squared() < 0.001:
 		direction = Vector2.RIGHT
 	var max_error_degrees: float = (2.0 if putting else 17.0) * (1.0 - skill_factor) + 0.5
@@ -700,7 +751,7 @@ func perform_throw(visitor: Dictionary) -> void:
 	if putting:
 		var putt_chance: float = clampf(0.12 + accuracy / 120.0 - remaining / 140.0, 0.08, 0.94)
 		sunk = rng.randf() < putt_chance
-	elif remaining <= reach and skill_factor > 0.85:
+	elif shot_target.distance_to(basket) < 0.1 and remaining <= reach and skill_factor > 0.85:
 		sunk = rng.randf() < 0.015
 	if sunk:
 		landing = basket
