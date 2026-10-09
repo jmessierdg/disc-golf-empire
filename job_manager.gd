@@ -498,6 +498,11 @@ func follow_worker_route(worker: Dictionary, delta: float) -> bool:
 	if index >= route.size():
 		return true
 	var target: Vector2 = route[index]
+	var step_cell: Vector2i = get_worker_cell(target)
+	if property_manager.is_water_cell(step_cell.x, step_cell.y):
+		worker["movement_path"] = []
+		worker["movement_index"] = 0
+		return false
 	move_worker_to_position(worker, target, delta)
 	if worker["position"].distance_to(target) < 1.0:
 		index += 1
@@ -598,8 +603,9 @@ func choose_inspection_destination(worker: Dictionary) -> bool:
 	var first: int = rng.randi_range(0, choices.size() - 1)
 	for offset in range(choices.size()):
 		var choice: Dictionary = choices[(first + offset) % choices.size()]
-		var world_point: Vector2 = choice["point"]
-		var local_point: Vector2 = property_manager.world_to_property_local(world_point)
+		# Hole tees, baskets and path points are already property-local.
+		# Converting again sent patrols toward unrelated locations.
+		var local_point: Vector2 = choice["point"]
 		if set_worker_route(worker, local_point):
 			worker["inspection_type"] = str(choice["kind"])
 			worker["inspection_target"] = local_point
@@ -619,8 +625,8 @@ func complete_worker_inspection(worker: Dictionary) -> void:
 		return
 	var other_hole: int = int(worker.get("inspection_other_hole", -1))
 	var destination: Vector2 = worker.get("inspection_target", Vector2.ZERO)
-	var world_point: Vector2 = property_manager.property_local_to_world(destination)
-	var cell: Vector2i = property_manager.world_to_cell(world_point)
+	# world_to_cell takes property-local coordinates.
+	var cell: Vector2i = property_manager.world_to_cell(destination)
 	if not property_manager.is_valid_cell(cell.x, cell.y):
 		return
 	var terrain_type: int = int(property_manager.terrain[cell.y][cell.x])
@@ -1636,7 +1642,7 @@ func process_area_job(
 		)
 	)
 
-	if grid_distance <= ADJACENT_CELL_DISTANCE:
+	if grid_distance <= ADJACENT_CELL_DISTANCE and not property_manager.is_water_cell(target_cell.x, target_cell.y):
 
 		clear_worker_travel_path(
 			worker
@@ -1773,45 +1779,8 @@ func process_navigation_travel(
 		worker["travelling"] = true
 
 	if travel_path.is_empty():
-
-		var target_position: Vector2 = (
-			get_cell_center_local(
-				target_cell
-			)
-		)
-
-		move_worker_to_position(
-			worker,
-			target_position,
-			delta
-		)
-
-		var fallback_worker_position: Vector2 = (
-			worker.get(
-				"position",
-				target_position
-			)
-		)
-
-		if fallback_worker_position.distance_to(
-			target_position
-		) <= 1.0:
-
-			worker["position"] = (
-				target_position
-			)
-
-			clear_worker_travel_path(
-				worker
-			)
-
-			process_cell_work(
-				job,
-				worker,
-				target_cell,
-				delta
-			)
-
+		# A* could not find a route. Never move straight across water
+		# or through a building as a fallback. Retry on a later tick.
 		return
 
 	var path_index: int = int(
@@ -1848,6 +1817,9 @@ func process_navigation_travel(
 		)
 	)
 
+	if property_manager.is_water_cell(path_cell.x, path_cell.y):
+		clear_worker_travel_path(worker)
+		return
 	move_worker_to_position(
 		worker,
 		path_position,
