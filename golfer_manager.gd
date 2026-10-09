@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 41: flight shape influences landing and tree contact.
+# Disc Golf Empire - Update 42: height-aware trees and curved-flight collision.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -762,48 +762,56 @@ func advance_visitor(visitor: Dictionary, delta: float) -> bool:
 # Distances are property-local pixels; 32 px represents 15 real feet.
 # A recreational player's drive typically travels farther than the old 24-264 px range.
 # This is a gameplay approximation, not a full aerodynamic physics simulation.
+# Each tree has a persistent, position-derived height and crown size. Heights
+# are expressed in feet, while the map uses property-local pixels.
+# The property currently stores tree positions only, so these characteristics
+# are derived deterministically until explicit tree records are introduced.
+func get_tree_dimensions(tree: Vector2) -> Dictionary:
+	var seed_value: int = absi(int(roundf(tree.x * 17.0 + tree.y * 31.0)))
+	var height_feet: float = 28.0 + float(seed_value % 43) # 28-70 ft
+	var crown_radius: float = 12.0 + float((seed_value / 7) % 9) # 12-20 px
+	return {"height_feet": height_feet, "crown_radius": crown_radius, "trunk_radius": 4.5}
+
+
+func tree_intersects_disc(tree: Vector2, disc_ground: Vector2, altitude_pixels: float) -> bool:
+	var dimensions: Dictionary = get_tree_dimensions(tree)
+	var height_pixels: float = float(dimensions["height_feet"]) / FEET_PER_PIXEL
+	# The crown spans the upper 65% of the tree; the trunk is narrower.
+	var crown_base: float = height_pixels * 0.35
+	var lateral: float = tree.distance_to(disc_ground)
+	if altitude_pixels <= height_pixels and altitude_pixels >= crown_base:
+		return lateral <= float(dimensions["crown_radius"])
+	if altitude_pixels < crown_base:
+		return lateral <= float(dimensions["trunk_radius"])
+	return false
+
+
+func get_flight_ground_point(start: Vector2, finish: Vector2, t: float, curve: float, turn: float, fade: float) -> Vector2:
+	var heading: Vector2 = (finish - start).normalized()
+	var side: Vector2 = Vector2(-heading.y, heading.x)
+	var envelope: float = sin(PI * t)
+	var offset: float = curve * envelope + turn * envelope * (1.0 - t) + fade * envelope * t
+	return start.lerp(finish, t) + side * offset
+
+
 func find_tree_contact(start: Vector2, finish: Vector2, flight_height: float) -> Dictionary:
-	# Trees are property-local, like all shot coordinates. Low shots
-	# can clip trunks; higher shots still risk the canopy.
-	var delta: Vector2 = finish - start
-	var distance: float = delta.length()
-	if distance < 0.1:
-		return {}
-	var best_fraction: float = 2.0
-	for tree_value in property_manager.trees:
-		var tree: Vector2 = tree_value
-		var fraction: float = clampf((tree - start).dot(delta) / maxf(delta.length_squared(), 0.001), 0.0, 1.0)
-		if fraction <= 0.02 or fraction >= 0.98:
-			continue
-		var closest: Vector2 = start.lerp(finish, fraction)
-		var lateral: float = tree.distance_to(closest)
-		var height: float = sin(PI * fraction) * flight_height
-		var collision_radius: float = 8.0 if height > 26.0 else 13.0
-		if lateral <= collision_radius and fraction < best_fraction:
-			best_fraction = fraction
-	if best_fraction <= 1.0:
-		return {"fraction": best_fraction, "point": start.lerp(finish, maxf(0.04, best_fraction - 0.025))}
-	return {}
+	return find_curved_tree_contact(start, finish, flight_height, 0.0, 0.0, 0.0)
 
 
 func find_curved_tree_contact(start: Vector2, finish: Vector2, height: float, curve: float, turn: float, fade: float) -> Dictionary:
-	var direction: Vector2 = (finish - start).normalized()
-	if direction.length_squared() < 0.001:
+	if start.distance_squared_to(finish) < 0.01:
 		return {}
-	var side: Vector2 = Vector2(-direction.y, direction.x)
+	# Sample densely enough to avoid tunneling through narrow trunks.
+	var steps: int = maxi(24, int(ceilf(start.distance_to(finish) / 4.0)))
 	var previous: Vector2 = start
-	var steps: int = maxi(12, int(ceilf(start.distance_to(finish) / 12.0)))
 	for step in range(1, steps + 1):
 		var t: float = float(step) / float(steps)
-		var envelope: float = sin(PI * t)
-		var offset: float = curve * envelope + turn * envelope * (1.0 - t) + fade * envelope * t
-		var current: Vector2 = start.lerp(finish, t) + side * offset
-		var altitude: float = envelope * height
-		var radius: float = 8.0 if altitude > 26.0 else 13.0
+		var current: Vector2 = get_flight_ground_point(start, finish, t, curve, turn, fade)
+		var altitude_pixels: float = sin(PI * t) * height
 		for tree_value in property_manager.trees:
 			var tree: Vector2 = tree_value
-			if tree.distance_to(current) <= radius:
-				return {"fraction": t, "point": previous}
+			if tree_intersects_disc(tree, current, altitude_pixels):
+				return {"fraction": t, "point": previous, "tree": tree}
 		previous = current
 	return {}
 
@@ -910,7 +918,7 @@ func perform_throw(visitor: Dictionary) -> void:
 	visitor["last_throw"] = "Tree hit" if not contact.is_empty() else ("Putt" if putting else ("Drive" if int(visitor["strokes"]) == 1 else "Approach"))
 	# On contact the disc stops at the impact point; do not keep a
 	# pronounced sideways arc that could visually pass through the tree.
-	var contact_scale: float = 0.18 if not contact.is_empty() else 1.0
+	var contact_scale: float = 0.0 if not contact.is_empty() else 1.0
 	visitor["flight_curve"] = 0.0 if putting else curve * contact_scale
 	visitor["flight_turn"] = 0.0 if putting else turn * contact_scale
 	visitor["flight_fade"] = 0.0 if putting else fade * contact_scale
@@ -947,19 +955,9 @@ func get_flight_visual(visitor: Dictionary) -> Vector2:
 	var t: float = clampf(float(visitor.get("flight_elapsed", 0.0)) / duration, 0.0, 1.0)
 	var start: Vector2 = visitor["flight_start"]
 	var finish: Vector2 = visitor["flight_end"]
-	var flat: Vector2 = start.lerp(finish, t)
-	var heading: Vector2 = (finish - start).normalized()
-	var sideways: Vector2 = Vector2(-heading.y, heading.x)
-	# Turn peaks early, fade peaks late, and release shape affects the
-	# entire trajectory. Each contribution is zero at takeoff and landing.
-	var envelope: float = sin(PI * t)
-	var early: float = envelope * (1.0 - t)
-	var late: float = envelope * t
-	var offset: float = float(visitor.get("flight_curve", 0.0)) * envelope
-	offset += float(visitor.get("flight_turn", 0.0)) * early
-	offset += float(visitor.get("flight_fade", 0.0)) * late
-	var arc: float = envelope * minf(FLIGHT_ARC_PIXELS, 14.0 + start.distance_to(finish) * 0.19)
-	return flat + sideways * offset + Vector2(0.0, -arc)
+	var ground: Vector2 = get_flight_ground_point(start, finish, t, float(visitor.get("flight_curve", 0.0)), float(visitor.get("flight_turn", 0.0)), float(visitor.get("flight_fade", 0.0)))
+	var arc: float = sin(PI * t) * minf(FLIGHT_ARC_PIXELS, 14.0 + start.distance_to(finish) * 0.19)
+	return ground + Vector2(0.0, -arc)
 
 
 func finish_hole(visitor: Dictionary) -> void:
@@ -1110,7 +1108,7 @@ func _draw() -> void:
 			if stage == "disc_flying":
 				var duration: float = maxf(0.01, float(visitor["flight_duration"]))
 				var progress: float = clampf(float(visitor["flight_elapsed"]) / duration, 0.0, 1.0)
-				var ground_local: Vector2 = (visitor["flight_start"] as Vector2).lerp(visitor["flight_end"], progress)
+				var ground_local: Vector2 = get_flight_ground_point(visitor["flight_start"], visitor["flight_end"], progress, float(visitor.get("flight_curve", 0.0)), float(visitor.get("flight_turn", 0.0)), float(visitor.get("flight_fade", 0.0)))
 				var ground_world: Vector2 = property_manager.property_local_to_world(ground_local)
 				# Ground shadow anchors the disc to its real horizontal position.
 				draw_circle(ground_world + Vector2(2, 2), 4.0, Color(0, 0, 0, FLIGHT_SHADOW_ALPHA))
