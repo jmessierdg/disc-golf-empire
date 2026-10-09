@@ -21,6 +21,9 @@ const THROW_INTERVAL := 1.6
 const MAX_STROKES := 12
 const FEET_PER_PIXEL := 15.0 / 32.0
 const PUTT_RANGE_PIXELS := 42.0
+# Gameplay-scale putting: 8 px is about 3.75 feet.
+const TAP_IN_RANGE_PIXELS := 8.0
+const CLOSE_PUTT_RANGE_PIXELS := 22.0
 const STANDSTILL_BASE_FEET := 95.0
 const STANDSTILL_MIN_FEET := 55.0
 const STANDSTILL_MAX_FEET := 140.0
@@ -784,8 +787,25 @@ func perform_throw(visitor: Dictionary) -> void:
 				landing = property_manager.cell_to_world_center(nearby)
 	var sunk: bool = false
 	if putting:
-		var putt_chance: float = clampf(0.12 + accuracy / 120.0 - remaining / 140.0, 0.08, 0.94)
-		sunk = rng.randf() < putt_chance
+		# Do not repeatedly miss from directly beneath the basket.
+		# Within tap-in range, resolve the stroke as holed out.
+		if remaining <= TAP_IN_RANGE_PIXELS:
+			sunk = true
+		else:
+			var distance_ratio: float = clampf((remaining - TAP_IN_RANGE_PIXELS) / (PUTT_RANGE_PIXELS - TAP_IN_RANGE_PIXELS), 0.0, 1.0)
+			var skill_ratio: float = clampf(accuracy / 100.0, 0.0, 1.0)
+			var putt_chance: float = lerpf(0.96, 0.28 + 0.45 * skill_ratio, distance_ratio)
+			if remaining <= CLOSE_PUTT_RANGE_PIXELS:
+				putt_chance = maxf(putt_chance, 0.82)
+			sunk = rng.randf() < putt_chance
+		if not sunk:
+			# Missed putts should finish close to the basket, rather
+			# than leave a disc almost stationary on the same lie.
+			var miss_direction: Vector2 = (landing - basket).normalized()
+			if miss_direction.length_squared() < 0.001:
+				miss_direction = Vector2.RIGHT.rotated(rng.randf_range(-PI, PI))
+			var miss_distance: float = rng.randf_range(4.0, 12.0 if remaining > CLOSE_PUTT_RANGE_PIXELS else 7.0)
+			landing = clamp_to_property(basket + miss_direction * miss_distance)
 	elif shot_target.distance_to(basket) < 0.1 and remaining <= reach and skill_factor > 0.85:
 		sunk = rng.randf() < 0.015
 	if sunk:
