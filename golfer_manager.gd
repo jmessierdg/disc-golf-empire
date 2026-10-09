@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 29: reliable partner check-in and rounds.
+# Disc Golf Empire - Update 30: golfer presentation polish on stable Update 29 behavior.
 # No licensed brands, no simulated disc flight yet.
 extends Node2D
 
@@ -43,6 +43,9 @@ var group_turns: Dictionary = {}
 var course_locations: Dictionary = {}
 const DEBUG_DESTINATIONS := false
 var render_timer: float = 0.0
+var visual_time: float = 0.0
+var visual_positions: Dictionary = {}
+const VISUAL_FOLLOW_RATE := 11.0
 var rng := RandomNumberGenerator.new()
 var profile_layer: CanvasLayer
 var profile_panel: PanelContainer
@@ -401,6 +404,8 @@ func _process(delta: float) -> void:
 				# Synchronization happens at check-in, tees, and baskets.
 				if advance_visitor(visitor, delta):
 					advance_stage(visitor)
+	visual_time += delta
+	update_visual_positions(delta)
 	render_timer += delta
 	if render_timer >= 1.0 / 30.0:
 		render_timer = 0.0
@@ -646,34 +651,97 @@ func advance_stage(visitor: Dictionary) -> void:
 			save_people()
 
 
+func update_visual_positions(delta: float) -> void:
+	# Display-only smoothing: never alter gameplay positions or objectives.
+	var active: Dictionary = {}
+	for value in visitors:
+		var visitor: Dictionary = value
+		var id: int = int(visitor["id"])
+		active[id] = true
+		var target: Vector2 = visitor["position"]
+		if not visual_positions.has(id):
+			visual_positions[id] = target
+		else:
+			var previous: Vector2 = visual_positions[id]
+			visual_positions[id] = previous.lerp(target, 1.0 - exp(-VISUAL_FOLLOW_RATE * delta))
+	for id in visual_positions.keys():
+		if not active.has(id):
+			visual_positions.erase(id)
+
+
+func get_activity_label(stage: String) -> String:
+	match stage:
+		"parking": return "Parking"
+		"waiting_partner": return "Waiting"
+		"walking_to_checkin": return "Check-in"
+		"waiting_at_checkin": return "Checking in"
+		"walking_to_tee": return "To tee"
+		"waiting_at_tee": return "At tee"
+		"throwing": return "Throwing"
+		"walking_to_lie": return "Retrieving"
+		"walking_to_basket": return "Finishing"
+		"waiting_at_basket": return "Hole complete"
+		"feedback": return "Reviewing"
+		"walking_to_car": return "Leaving"
+	return ""
+
+
 func _draw() -> void:
 	if property_manager == null:
 		return
 	for visitor_value in visitors:
 		var visitor: Dictionary = visitor_value
-		var person: Dictionary = people[int(visitor["id"])]
-		var world: Vector2 = property_manager.property_local_to_world(visitor["position"])
+		var id: int = int(visitor["id"])
+		var person: Dictionary = people[id]
+		var stage: String = str(visitor["stage"])
+		var local_position: Vector2 = visual_positions.get(id, visitor["position"])
+		var world: Vector2 = property_manager.property_local_to_world(local_position)
 		var color: Color = PALETTE[int(person["appearance"]) % PALETTE.size()]
 		var car_local: Vector2 = visitor.get("car_position", visitor["position"])
 		var car_world: Vector2 = property_manager.property_local_to_world(car_local)
 		var car_color: Color = color.darkened(0.25)
+		# Cars remain parked while their owners play.
 		draw_rect(Rect2(car_world - Vector2(10.0, 5.0), Vector2(20.0, 10.0)), Color(0, 0, 0, 0.25), true)
 		draw_rect(Rect2(car_world - Vector2(9.0, 7.0), Vector2(18.0, 11.0)), car_color, true)
 		draw_rect(Rect2(car_world - Vector2(2.0, 6.0), Vector2(7.0, 9.0)), Color(0.55, 0.75, 0.84, 0.95), true)
-		if str(visitor["stage"]) in ["driving_in", "driving_out"]:
+		if stage in ["driving_in", "driving_out"]:
 			continue
 		if DEBUG_DESTINATIONS and visitor.has("destination"):
 			var goal_world: Vector2 = property_manager.property_local_to_world(visitor["destination"])
 			draw_line(world, goal_world, Color(1.0, 0.8, 0.15, 0.8), 2.0)
 			draw_circle(goal_world, 7.0, Color(1.0, 0.8, 0.15, 0.8))
-		draw_circle(world + Vector2(2, 5), 7.0, Color(0, 0, 0, 0.22))
-		draw_circle(world, 6.5, color)
-		if str(visitor["stage"]) in ["throwing", "walking_to_lie", "walking_to_basket"]:
+		var moving: bool = stage.begins_with("walking_")
+		var bob: float = sin(visual_time * 11.0 + float(id)) * 1.1 if moving else 0.0
+		var body: Vector2 = world + Vector2(0.0, bob)
+		draw_ellipse_shadow(body)
+		# Small readable torso/head silhouette rather than a single dot.
+		draw_line(body + Vector2(0, -1), body + Vector2(0, 5), color.darkened(0.28), 5.0)
+		draw_circle(body + Vector2(0, -2), 5.5, color)
+		draw_circle(body + Vector2(0, -9), 4.0, Color("efc49d"))
+		if stage in ["throwing", "walking_to_lie", "walking_to_basket"]:
 			var disc_world: Vector2 = property_manager.property_local_to_world(visitor["disc_position"])
+			draw_circle(disc_world + Vector2(1, 2), 4.5, Color(0, 0, 0, 0.24))
 			draw_circle(disc_world, 3.5, Color(0.98, 0.83, 0.23, 1.0))
 			draw_arc(disc_world, 5.5, 0.0, TAU, 12, Color(0.13, 0.16, 0.12, 0.8), 1.0)
-		draw_circle(world + Vector2(0, -7), 4.5, Color("efc49d"))
-		draw_arc(world, 10.0, 0.0, TAU, 16, Color(1.0, 1.0, 1.0, 0.8) if selected_id == int(person["id"]) else Color.TRANSPARENT, 1.8)
+		# Restrict status labels to stationary interactions to reduce clutter.
+		if stage in ["waiting_partner", "waiting_at_checkin", "waiting_at_tee", "throwing", "waiting_at_basket"]:
+			var label_text: String = get_activity_label(stage)
+			var font: Font = ThemeDB.fallback_font
+			var font_size: int = 11
+			var width: float = font.get_string_size(label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
+			var label_position: Vector2 = body + Vector2(-width * 0.5, -20)
+			draw_string_outline(font, label_position, label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 3, Color(0.07, 0.11, 0.09, 0.9))
+			draw_string(font, label_position, label_text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, Color.WHITE)
+		if selected_id == id:
+			draw_arc(body, 10.0, 0.0, TAU, 16, Color.WHITE, 1.8)
+
+
+func draw_ellipse_shadow(at: Vector2) -> void:
+	# Lightweight elliptical ground shadow (no extra sprites or assets).
+	draw_set_transform(at + Vector2(2, 6), 0.0, Vector2(1.25, 0.55))
+	draw_circle(Vector2.ZERO, 6.0, Color(0, 0, 0, 0.23))
+	draw_set_transform(Vector2.ZERO)
+
 
 func select_at(world_point: Vector2) -> bool:
 	if property_manager == null:
