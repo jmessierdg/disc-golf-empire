@@ -34,6 +34,9 @@ var next_membership_number: int = 10001
 var spawn_timer: float = 2.0
 var next_group_id: int = 1
 var last_feedback: String = ""
+# All gameplay destinations use PROPERTY-LOCAL coordinates.
+var course_locations: Dictionary = {}
+const DEBUG_DESTINATIONS := false
 var render_timer: float = 0.0
 var rng := RandomNumberGenerator.new()
 var profile_layer: CanvasLayer
@@ -164,6 +167,22 @@ func get_driveway_route(to_parking: bool, parking_slot: Vector2) -> Array:
 		route.append(parking_slot)
 	return route
 
+func refresh_course_locations() -> void:
+	# CourseManager stores tee and basket coordinates in property-local space.
+	# Never convert these a second time.
+	course_locations.clear()
+	course_locations["entrance"] = get_entrance_local()
+	course_locations["parking"] = get_parking_local()
+	for i in range(course_manager.holes.size()):
+		if not course_manager.is_hole_complete(i):
+			continue
+		var hole: Dictionary = course_manager.get_hole(i)
+		course_locations[i] = {
+			"tee": hole["tee"],
+			"basket": hole["basket"]
+		}
+
+
 func completed_holes() -> Array:
 	var result: Array = []
 	for i in range(course_manager.holes.size()):
@@ -205,6 +224,7 @@ func make_person() -> Dictionary:
 
 func spawn_visitor() -> void:
 	# Only admit a complete pair when two actual parking spaces are free.
+	refresh_course_locations()
 	var holes: Array = completed_holes()
 	if holes.is_empty() or visitors.size() + GROUP_SIZE > MAX_VISITORS:
 		return
@@ -233,7 +253,7 @@ func spawn_visitor() -> void:
 			"wait": float(index) * 2.5, "walked": 0.0, "off_path": 0.0,
 			"route_distance": 0.0, "strokes": 0, "round_scores": {},
 			"disc_position": start, "last_throw": "", "throw_wait": 0.0,
-			"round_recorded": false
+			"round_recorded": false, "destination": slot, "destination_kind": "parking"
 		}
 		pair.append(visitor)
 	pair[0]["partner_id"] = int(pair[1]["id"])
@@ -244,7 +264,12 @@ func spawn_visitor() -> void:
 
 
 func hole_local(index: int, which: String) -> Vector2:
-	return property_manager.world_to_property_local(course_manager.get_hole(index)[which])
+	# Single source of truth: all cached hole locations are property-local.
+	if not course_locations.has(index):
+		refresh_course_locations()
+	if course_locations.has(index):
+		return course_locations[index].get(which, Vector2.ZERO)
+	return Vector2.ZERO
 
 func _process(delta: float) -> void:
 	if property_manager == null:
@@ -328,6 +353,8 @@ func route_on_property(start: Vector2, finish: Vector2) -> Array:
 
 func set_destination(visitor: Dictionary, destination: Vector2) -> void:
 	var safe_destination: Vector2 = clamp_to_property(destination)
+	visitor["destination"] = safe_destination
+	visitor["destination_kind"] = str(visitor.get("stage", ""))
 	var route: Array = route_on_property(visitor["position"], safe_destination)
 	if route.is_empty():
 		# No traversable route: remain in place instead of walking into nowhere.
@@ -559,6 +586,10 @@ func _draw() -> void:
 		draw_rect(Rect2(car_world - Vector2(2.0, 6.0), Vector2(7.0, 9.0)), Color(0.55, 0.75, 0.84, 0.95), true)
 		if str(visitor["stage"]) in ["driving_in", "driving_out"]:
 			continue
+		if DEBUG_DESTINATIONS and visitor.has("destination"):
+			var goal_world: Vector2 = property_manager.property_local_to_world(visitor["destination"])
+			draw_line(world, goal_world, Color(1.0, 0.8, 0.15, 0.8), 2.0)
+			draw_circle(goal_world, 7.0, Color(1.0, 0.8, 0.15, 0.8))
 		draw_circle(world + Vector2(2, 5), 7.0, Color(0, 0, 0, 0.22))
 		draw_circle(world, 6.5, color)
 		if str(visitor["stage"]) in ["throwing", "walking_to_lie", "walking_to_basket"]:
