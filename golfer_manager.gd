@@ -23,6 +23,7 @@ const PALETTE := [Color("5e9ec7"), Color("d59c64"), Color("b46d9b"), Color("81b3
 var property_manager
 var course_manager
 var path_manager
+var navigation_manager
 var people: Dictionary = {}
 var visitors: Array = []
 var next_person_id: int = 1
@@ -39,6 +40,8 @@ func setup(property_ref, course_ref, path_ref) -> void:
 	property_manager = property_ref
 	course_manager = course_ref
 	path_manager = path_ref
+	# Reuse the grounds crew's obstacle-aware, path-preferring navigation.
+	navigation_manager = get_parent().get_node_or_null("JobManager")
 	z_index = 4
 	rng.randomize()
 	load_people()
@@ -146,6 +149,17 @@ func _process(delta: float) -> void:
 		if float(visitor["wait"]) > 0.0:
 			visitor["wait"] = maxf(0.0, float(visitor["wait"]) - delta)
 			continue
+		if str(visitor["stage"]) == "navigation_blocked":
+			visitor["wait"] = 4.0
+			# Retry without advancing to a nonexistent waypoint.
+			var cursor: int = int(visitor["hole_cursor"])
+			if cursor < visitor["holes"].size():
+				visitor["stage"] = "tee"
+				set_destination(visitor, hole_local(int(visitor["holes"][cursor]), "tee"))
+			else:
+				visitor["stage"] = "walking_to_car"
+				set_destination(visitor, visitor["parking_slot"])
+			continue
 		if str(visitor["stage"]) == "throwing":
 			perform_throw(visitor)
 			continue
@@ -160,9 +174,49 @@ func _process(delta: float) -> void:
 		render_timer = 0.0
 		queue_redraw()
 
+func clamp_to_property(point: Vector2) -> Vector2:
+	var size: Vector2 = property_manager.get_property_size_pixels()
+	var inset: float = property_manager.CELL_SIZE * 0.6
+	return Vector2(clampf(point.x, inset, size.x - inset), clampf(point.y, inset, size.y - inset))
+
+func route_on_property(start: Vector2, finish: Vector2) -> Array:
+	# The worker A* understands water, trees, facilities and completed walkways.
+	# Avoid straight-line routes through obstacles or beyond the property.
+	var safe_start: Vector2 = clamp_to_property(start)
+	var safe_finish: Vector2 = clamp_to_property(finish)
+	if navigation_manager == null:
+		return [safe_finish]
+	var start_cell: Vector2i = property_manager.world_to_cell(safe_start)
+	var target_cell: Vector2i = property_manager.world_to_cell(safe_finish)
+	var blocked: Dictionary = navigation_manager.build_navigation_blocked_cells(start_cell, target_cell)
+	if blocked.has(start_cell):
+		start_cell = navigation_manager.find_nearest_walkable_cell(start_cell, blocked)
+	if blocked.has(target_cell):
+		target_cell = navigation_manager.find_nearest_walkable_cell(target_cell, blocked)
+	if start_cell.x < 0 or target_cell.x < 0:
+		return []
+	var cells: Array = navigation_manager.find_navigation_path(start_cell, target_cell)
+	if cells.is_empty():
+		if start_cell == target_cell:
+			return [property_manager.cell_to_world_center(target_cell)]
+		return []
+	var route: Array = []
+	for cell_value in cells:
+		route.append(property_manager.cell_to_world_center(cell_value))
+	# End at a navigable cell center if the requested destination is obstructed.
+	if not blocked.has(property_manager.world_to_cell(safe_finish)):
+		route.append(safe_finish)
+	return route
+
 func set_destination(visitor: Dictionary, destination: Vector2) -> void:
-	var start: Vector2 = visitor["position"]
-	var route: Array = route_via_walkways(start, destination)
+	var safe_destination: Vector2 = clamp_to_property(destination)
+	var route: Array = route_on_property(visitor["position"], safe_destination)
+	if route.is_empty():
+		# No traversable route: remain in place instead of walking into nowhere.
+		visitor["stage"] = "navigation_blocked"
+		visitor["route"] = []
+		visitor["route_index"] = 0
+		return
 	visitor["route"] = route
 	visitor["route_index"] = 0
 	visitor["route_distance"] = 0.0
@@ -253,7 +307,7 @@ func advance_visitor(visitor: Dictionary, delta: float) -> bool:
 	var route: Array = visitor["route"]
 	var index: int = int(visitor["route_index"])
 	if index >= route.size():
-		return true
+		return false
 	var target: Vector2 = route[index]
 	var current: Vector2 = visitor["position"]
 	var distance: float = current.distance_to(target)
@@ -291,7 +345,14 @@ func perform_throw(visitor: Dictionary) -> void:
 	var perpendicular: Vector2 = Vector2(-direction.y, direction.x)
 	var dispersion: float = (1.0 - skill_factor) * (5.0 if putting else 45.0)
 	var lateral: float = rng.randf_range(-dispersion, dispersion)
-	var landing: Vector2 = lie + direction * forward + perpendicular * lateral
+	var landing: Vector2 = clamp_to_property(lie + direction * forward + perpendicular * lateral)
+	if navigation_manager != null:
+		var landing_cell: Vector2i = property_manager.world_to_cell(landing)
+		var blocked: Dictionary = navigation_manager.build_navigation_blocked_cells(landing_cell, landing_cell)
+		if blocked.has(landing_cell):
+			var nearby: Vector2i = navigation_manager.find_nearest_walkable_cell(landing_cell, blocked)
+			if nearby.x >= 0:
+				landing = property_manager.cell_to_world_center(nearby)
 	var sunk: bool = false
 	if putting:
 		var putt_chance: float = clampf(0.12 + accuracy / 120.0 - remaining / 140.0, 0.08, 0.94)
