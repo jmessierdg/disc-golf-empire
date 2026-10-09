@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 39: intended fairway shot planning and path-preferring walking.
+# Disc Golf Empire - Update 40: obstacle-aware shot planning and recovery.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -22,6 +22,10 @@ const MAX_STROKES := 12
 const FEET_PER_PIXEL := 15.0 / 32.0
 const PUTT_RANGE_PIXELS := 42.0
 # Gameplay-scale putting: 8 px is about 3.75 feet.
+# Shot-planning candidate angles are relative to the intended fairway line.
+const SHOT_CANDIDATE_ANGLES := [0.0, -12.0, 12.0, -25.0, 25.0, -40.0, 40.0, -60.0, 60.0, -85.0, 85.0]
+const SHOT_CANDIDATE_POWERS := [1.0, 0.72, 0.46, 0.28]
+const RECOVERY_MIN_ADVANCE := 18.0
 const TAP_IN_RANGE_PIXELS := 8.0
 const CLOSE_PUTT_RANGE_PIXELS := 22.0
 const STANDSTILL_BASE_FEET := 95.0
@@ -585,6 +589,58 @@ func get_intended_shot_target(hole_index: int, lie: Vector2, basket: Vector2, re
 	return basket
 
 
+func plan_obstacle_aware_shot(visitor: Dictionary, lie: Vector2, basket: Vector2, intended: Vector2, reach: float, course_iq: float, control: float) -> Vector2:
+	# Evaluate *possible* throws, not a single waypoint. The designer's
+	# route supplies the preferred heading; tree clearance decides safety.
+	var preferred: Vector2 = (intended - lie).normalized()
+	if preferred.length_squared() < 0.001:
+		preferred = (basket - lie).normalized()
+	if preferred.length_squared() < 0.001:
+		return basket
+	var remaining: float = lie.distance_to(basket)
+	var previous_hit: bool = str(visitor.get("last_throw", "")) == "Tree hit"
+	var old_target: Vector2 = visitor.get("last_shot_target", lie)
+	var best_target: Vector2 = intended
+	var best_score: float = -INF
+	var aggression: float = clampf((course_iq * 0.65 + control * 0.35) / 100.0, 0.0, 1.0)
+	for angle_value in SHOT_CANDIDATE_ANGLES:
+		var angle: float = float(angle_value)
+		var direction: Vector2 = preferred.rotated(deg_to_rad(angle))
+		for power_value in SHOT_CANDIDATE_POWERS:
+			var fraction: float = float(power_value)
+			var length: float = minf(reach * fraction, maxf(remaining * 1.3, 45.0))
+			var candidate: Vector2 = clamp_to_property(lie + direction * length)
+			var distance: float = lie.distance_to(candidate)
+			if distance < RECOVERY_MIN_ADVANCE:
+				continue
+			var estimated_height: float = minf(FLIGHT_ARC_PIXELS, 14.0 + distance * 0.19)
+			var collision: Dictionary = find_tree_contact(lie, candidate, estimated_height)
+			var hit_fraction: float = float(collision.get("fraction", 1.0))
+			var safe_distance: float = distance * hit_fraction
+			# Favor progress along the designer's intended fairway, while
+			# rewarding a clear line and penalizing a blocked aggressive shot.
+			var progress: float = (candidate - lie).dot(preferred)
+			var basket_gain: float = remaining - candidate.distance_to(basket)
+			var score: float = progress * 0.48 + basket_gain * 0.28
+			score += safe_distance * 0.20
+			score -= absf(angle) * lerpf(0.28, 0.12, aggression)
+			if not collision.is_empty():
+				score -= 125.0 + (distance - safe_distance) * 0.75
+			# Avoid selecting the same failed line after a tree hit.
+			if previous_hit and candidate.distance_to(old_target) < 32.0:
+				score -= 180.0
+			# A recovery pitch-out can be sideways but should never be
+			# preferred over an equally safe forward fairway shot.
+			if basket_gain < -25.0:
+				score -= 50.0
+			if score > best_score:
+				best_score = score
+				best_target = candidate
+	# If all candidates are poor, still select the least-bad route;
+	# the actual throw and collision system remain authoritative.
+	return best_target
+
+
 func set_destination(visitor: Dictionary, destination: Vector2) -> void:
 	var safe_destination: Vector2 = clamp_to_property(destination)
 	visitor["destination"] = safe_destination
@@ -753,12 +809,13 @@ func perform_throw(visitor: Dictionary) -> void:
 	var reach: float = max_reach if not putting else (18.0 + accuracy * 0.36)
 	var power_variation: float = lerpf(0.66, 0.92, control / 100.0)
 	var course_iq: float = float(skills.get("course_iq", 50))
-	var shot_target: Vector2 = basket if putting else get_intended_shot_target(hole_number, lie, basket, reach, course_iq, control)
+	var intended: Vector2 = basket if putting else get_intended_shot_target(hole_number, lie, basket, reach, course_iq, control)
+	var shot_target: Vector2 = intended if putting else plan_obstacle_aware_shot(visitor, lie, basket, intended, reach, course_iq, control)
 	var target_distance: float = lie.distance_to(shot_target)
 	var forward: float = minf(target_distance, reach * rng.randf_range(power_variation, 1.05))
 	# Never spend full strokes nudging a few pixels toward a path node.
 	if not putting and remaining > 55.0 and forward < 28.0:
-		shot_target = basket
+		shot_target = plan_obstacle_aware_shot(visitor, lie, basket, basket, reach, course_iq, control)
 		target_distance = lie.distance_to(shot_target)
 		forward = minf(target_distance, reach * rng.randf_range(power_variation, 1.05))
 	# Aim toward the selected fairway waypoint, with a skill-based
@@ -811,6 +868,7 @@ func perform_throw(visitor: Dictionary) -> void:
 	if sunk:
 		landing = basket
 	visitor["strokes"] = int(visitor["strokes"]) + 1
+	visitor["last_shot_target"] = shot_target
 	visitor["last_throw"] = "Tree hit" if not contact.is_empty() else ("Putt" if putting else ("Drive" if int(visitor["strokes"]) == 1 else "Approach"))
 	# Shape varies by handedness, skill, and throw type. This is a
 	# deterministic visual flight curve, not full disc aerodynamics.
