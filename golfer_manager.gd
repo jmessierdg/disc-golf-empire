@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 28: coordinated twosomes and complete rounds.
+# Disc Golf Empire - Update 29: reliable partner check-in and rounds.
 # No licensed brands, no simulated disc flight yet.
 extends Node2D
 
@@ -10,7 +10,7 @@ const GROUP_SIZE := 2
 const PARTNER_WAIT_SECONDS := 1.5
 const TEE_PREPARE_SECONDS := 2.2
 const BETWEEN_SHOTS_SECONDS := 1.0
-const GROUP_WAIT_RADIUS := 55.0
+const CHECKIN_SECONDS := 2.0
 const FEEDBACK_SECONDS := 3.0
 const WALK_SPEED := 19.0
 const CAR_SPEED := 95.0
@@ -76,6 +76,17 @@ func get_parking_local() -> Vector2:
 		var points: Array = property_manager.property_driveway_points
 		return property_manager.world_to_property_local(points[points.size() - 1])
 	return property_manager.get_property_local_center()
+
+func get_checkin_local() -> Vector2:
+	# Starter office position is world-space; golfer destinations are property-local.
+	var office: Dictionary = property_manager.get_starter_facility("starter_office")
+	if not office.is_empty():
+		var office_local: Vector2 = property_manager.world_to_property_local(office["position"])
+		# Stand just outside the office entrance rather than inside its footprint.
+		var office_size: Vector2 = office.get("size", Vector2(52.0, 64.0))
+		return clamp_to_property(office_local + Vector2(office_size.x * 0.5 + 10.0, 0.0))
+	return get_parking_local()
+
 
 func get_parking_slot(slot_index: int) -> Vector2:
 	# Four distinct marked positions inside the existing starter parking footprint.
@@ -214,6 +225,7 @@ func refresh_course_locations() -> void:
 	course_locations.clear()
 	course_locations["entrance"] = get_entrance_local()
 	course_locations["parking"] = get_parking_local()
+	course_locations["checkin"] = get_checkin_local()
 	for i in range(course_manager.holes.size()):
 		if not course_manager.is_hole_complete(i):
 			continue
@@ -295,7 +307,7 @@ func spawn_visitor() -> void:
 			"route_distance": 0.0, "strokes": 0, "round_scores": {},
 			"disc_position": start, "last_throw": "", "throw_wait": 0.0,
 			"round_recorded": false, "destination": slot, "destination_kind": "parking",
-			"tee_ready": false, "shot_pause": 0.0
+			"tee_ready": false, "shot_pause": 0.0, "checked_in": false
 		}
 		pair.append(visitor)
 	pair[0]["partner_id"] = int(pair[1]["id"])
@@ -335,15 +347,21 @@ func _process(delta: float) -> void:
 					advance_stage(visitor)
 			"waiting_partner":
 				var partner: Dictionary = get_partner(visitor)
-				# Nobody starts walking until both vehicles are parked and both
-				# golfers have exited. The second person triggers the pair.
+				# Synchronize at parking, then send BOTH to the check-in desk.
 				if not partner.is_empty() and str(partner["stage"]) == "waiting_partner":
 					for member in [visitor, partner]:
+						member["stage"] = "walking_to_checkin"
+						set_destination(member, get_checkin_local())
+			"waiting_at_checkin":
+				var partner: Dictionary = get_partner(visitor)
+				if not partner.is_empty() and str(partner["stage"]) == "waiting_at_checkin":
+					for member in [visitor, partner]:
+						member["checked_in"] = true
 						member["stage"] = "walking_to_tee"
 						set_destination(member, hole_local(int(member["holes"][0]), "tee"))
 			"waiting_at_tee":
 				var partner: Dictionary = get_partner(visitor)
-				if not partner.is_empty() and str(partner["stage"]) == "waiting_at_tee":
+				if bool(visitor.get("checked_in", false)) and not partner.is_empty() and bool(partner.get("checked_in", false)) and str(partner["stage"]) == "waiting_at_tee":
 					# Both arrive first. Set both ready together so iteration
 					# order cannot let one player tee off prematurely.
 					for member in [visitor, partner]:
@@ -378,15 +396,10 @@ func _process(delta: float) -> void:
 					finish_throw_turn(visitor)
 			"parking":
 				advance_stage(visitor)
-			"walking_to_tee", "walking_to_lie", "walking_to_basket", "walking_to_car":
-				# Keep partners loosely together between holes without ever
-				# redirecting either golfer away from the true tee coordinate.
-				var can_walk: bool = true
-				if stage == "walking_to_tee":
-					var partner: Dictionary = get_partner(visitor)
-					if not partner.is_empty() and str(partner["stage"]) == "walking_to_tee":
-						can_walk = visitor["position"].distance_to(partner["position"]) <= GROUP_WAIT_RADIUS
-				if can_walk and advance_visitor(visitor, delta):
+			"walking_to_checkin", "walking_to_tee", "walking_to_lie", "walking_to_basket", "walking_to_car":
+				# Never freeze navigation because partners are too far apart.
+				# Synchronization happens at check-in, tees, and baskets.
+				if advance_visitor(visitor, delta):
 					advance_stage(visitor)
 	render_timer += delta
 	if render_timer >= 1.0 / 30.0:
@@ -607,6 +620,9 @@ func advance_stage(visitor: Dictionary) -> void:
 			visitor["car_position"] = visitor["parking_slot"]
 		"parking":
 			visitor["stage"] = "waiting_partner"
+		"walking_to_checkin":
+			visitor["stage"] = "waiting_at_checkin"
+			visitor["wait"] = CHECKIN_SECONDS
 		"walking_to_tee":
 			visitor["stage"] = "waiting_at_tee"
 		"walking_to_lie":
