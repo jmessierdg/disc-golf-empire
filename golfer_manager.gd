@@ -6,7 +6,9 @@ signal visitor_arrived(person_id: int)
 signal visitor_departed(person_id: int)
 
 const MAX_VISITORS := 3
-const WALK_SPEED := 54.0
+const WALK_SPEED := 19.0
+const CAR_SPEED := 95.0
+const PARK_SECONDS := 2.0
 const SPAWN_INTERVAL := 14.0
 const THROW_INTERVAL := 1.6
 const MAX_STROKES := 12
@@ -44,10 +46,37 @@ func setup(property_ref, course_ref, path_ref) -> void:
 	set_process(true)
 
 func get_entrance_local() -> Vector2:
+	# Roadside entrance is the outermost point of the property's connected driveway.
+	if property_manager.property_driveway_points.size() > 0:
+		var points: Array = property_manager.property_driveway_points
+		return property_manager.world_to_property_local(points[0])
+	return property_manager.get_property_local_center()
+
+func get_parking_local() -> Vector2:
+	var facility: Dictionary = property_manager.get_starter_facility("starter_parking")
+	if not facility.is_empty():
+		return property_manager.world_to_property_local(facility["position"])
 	if property_manager.property_driveway_points.size() > 0:
 		var points: Array = property_manager.property_driveway_points
 		return property_manager.world_to_property_local(points[points.size() - 1])
 	return property_manager.get_property_local_center()
+
+func get_parking_slot(visitor_id: int) -> Vector2:
+	# Keep parked vehicles separate in the starter lot.
+	var center: Vector2 = get_parking_local()
+	var slot: int = (visitor_id - 1) % MAX_VISITORS
+	return center + Vector2((float(slot) - 1.0) * 24.0, 0.0)
+
+func get_driveway_route(to_parking: bool, parking_slot: Vector2) -> Array:
+	var route: Array = []
+	for world_point in property_manager.property_driveway_points:
+		route.append(property_manager.world_to_property_local(world_point))
+	if not to_parking:
+		route.reverse()
+		route.push_front(parking_slot)
+	else:
+		route.append(parking_slot)
+	return route
 
 func completed_holes() -> Array:
 	var result: Array = []
@@ -94,9 +123,12 @@ func spawn_visitor() -> void:
 		return
 	var person: Dictionary = make_person()
 	var start: Vector2 = get_entrance_local()
-	var visitor: Dictionary = {"id": int(person["id"]), "position": start, "state": "arriving", "holes": holes, "hole_cursor": 0, "stage": "tee", "route": [], "route_index": 0, "wait": 0.0, "walked": 0.0, "off_path": 0.0, "route_distance": 0.0, "strokes": 0, "round_scores": {}, "disc_position": start, "last_throw": "", "throw_wait": 0.0}
+	var visitor: Dictionary = {"id": int(person["id"]), "position": start, "state": "arriving", "holes": holes, "hole_cursor": 0, "stage": "driving_in", "route": [], "route_index": 0, "wait": 0.0, "walked": 0.0, "off_path": 0.0, "route_distance": 0.0, "strokes": 0, "round_scores": {}, "disc_position": start, "last_throw": "", "throw_wait": 0.0}
 	visitors.append(visitor)
-	set_destination(visitor, hole_local(holes[0], "tee"))
+	visitor["parking_slot"] = get_parking_slot(int(person["id"]))
+	visitor["car_position"] = start
+	visitor["route"] = get_driveway_route(true, visitor["parking_slot"])
+	visitor["route_index"] = 0
 	visitor_arrived.emit(int(person["id"]))
 
 func hole_local(index: int, which: String) -> Vector2:
@@ -116,6 +148,10 @@ func _process(delta: float) -> void:
 			continue
 		if str(visitor["stage"]) == "throwing":
 			perform_throw(visitor)
+			continue
+		if str(visitor["stage"]) in ["driving_in", "driving_out"]:
+			if advance_vehicle(visitor, delta):
+				advance_stage(visitor)
 			continue
 		if advance_visitor(visitor, delta):
 			advance_stage(visitor)
@@ -200,6 +236,19 @@ func route_via_walkways(start: Vector2, finish: Vector2) -> Array:
 	route.append(finish)
 	return route
 
+func advance_vehicle(visitor: Dictionary, delta: float) -> bool:
+	var route: Array = visitor["route"]
+	var index: int = int(visitor["route_index"])
+	if index >= route.size():
+		return true
+	var target: Vector2 = route[index]
+	var current: Vector2 = visitor["position"]
+	visitor["position"] = current.move_toward(target, CAR_SPEED * delta)
+	visitor["car_position"] = visitor["position"]
+	if visitor["position"].distance_to(target) <= 0.1:
+		visitor["route_index"] = index + 1
+	return int(visitor["route_index"]) >= route.size()
+
 func advance_visitor(visitor: Dictionary, delta: float) -> bool:
 	var route: Array = visitor["route"]
 	var index: int = int(visitor["route_index"])
@@ -280,14 +329,26 @@ func finish_hole(visitor: Dictionary) -> void:
 		visitor["stage"] = "tee"
 		set_destination(visitor, hole_local(int(holes[cursor + 1]), "tee"))
 	else:
-		visitor["stage"] = "exiting"
-		set_destination(visitor, get_entrance_local())
+		visitor["stage"] = "walking_to_car"
+		set_destination(visitor, visitor["parking_slot"])
 
 func advance_stage(visitor: Dictionary) -> void:
 	var holes: Array = visitor["holes"]
 	var cursor: int = int(visitor["hole_cursor"])
 	var stage: String = str(visitor["stage"])
-	if stage == "tee":
+	if stage == "driving_in":
+		visitor["stage"] = "tee"
+		visitor["wait"] = PARK_SECONDS
+		visitor["position"] = visitor["parking_slot"]
+		visitor["car_position"] = visitor["parking_slot"]
+		set_destination(visitor, hole_local(int(holes[0]), "tee"))
+	elif stage == "walking_to_car":
+		visitor["stage"] = "driving_out"
+		visitor["position"] = visitor["parking_slot"]
+		visitor["car_position"] = visitor["parking_slot"]
+		visitor["route"] = get_driveway_route(false, visitor["parking_slot"])
+		visitor["route_index"] = 0
+	elif stage == "tee":
 		visitor["strokes"] = 0
 		visitor["disc_position"] = hole_local(int(holes[cursor]), "tee")
 		visitor["stage"] = "throwing"
@@ -297,7 +358,7 @@ func advance_stage(visitor: Dictionary) -> void:
 		visitor["wait"] = 0.6
 	elif stage == "walking_to_basket":
 		finish_hole(visitor)
-	elif stage == "exiting":
+	elif stage == "driving_out":
 		var person: Dictionary = people[int(visitor["id"])]
 		person["visits"] = int(person["visits"]) + 1
 		var feedback: String = "Walking routes were easy to follow."
@@ -324,6 +385,14 @@ func _draw() -> void:
 		var person: Dictionary = people[int(visitor["id"])]
 		var world: Vector2 = property_manager.property_local_to_world(visitor["position"])
 		var color: Color = PALETTE[int(person["appearance"]) % PALETTE.size()]
+		var car_local: Vector2 = visitor.get("car_position", visitor["position"])
+		var car_world: Vector2 = property_manager.property_local_to_world(car_local)
+		var car_color: Color = color.darkened(0.25)
+		draw_rect(Rect2(car_world - Vector2(10.0, 5.0), Vector2(20.0, 10.0)), Color(0, 0, 0, 0.25), true)
+		draw_rect(Rect2(car_world - Vector2(9.0, 7.0), Vector2(18.0, 11.0)), car_color, true)
+		draw_rect(Rect2(car_world - Vector2(2.0, 6.0), Vector2(7.0, 9.0)), Color(0.55, 0.75, 0.84, 0.95), true)
+		if str(visitor["stage"]) in ["driving_in", "driving_out"]:
+			continue
 		draw_circle(world + Vector2(2, 5), 7.0, Color(0, 0, 0, 0.22))
 		draw_circle(world, 6.5, color)
 		if str(visitor["stage"]) in ["throwing", "walking_to_lie", "walking_to_basket"]:
@@ -338,6 +407,8 @@ func select_at(world_point: Vector2) -> bool:
 		return false
 	for visitor_value in visitors:
 		var visitor: Dictionary = visitor_value
+		if str(visitor["stage"]) in ["driving_in", "driving_out"]:
+			continue
 		var world: Vector2 = property_manager.property_local_to_world(visitor["position"])
 		if world.distance_to(world_point) < 22.0:
 			selected_id = int(visitor["id"])
