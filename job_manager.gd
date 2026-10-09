@@ -388,6 +388,7 @@ func assign_job_to_worker(
 	)
 
 	worker["state"] = WORKER_FETCHING
+	worker["return_target"] = get_maintenance_local_position()
 
 	worker["job_id"] = int(
 		job["id"]
@@ -513,41 +514,51 @@ func follow_worker_route(worker: Dictionary, delta: float) -> bool:
 
 func move_worker_to_facility(worker: Dictionary, delta: float) -> bool:
 	var home: Vector2 = get_maintenance_local_position()
-	# Never report a return completed just because a route was cleared.
-	if (worker["position"] as Vector2).distance_to(home) < 3.0:
-		worker["position"] = home
+	var destination: Vector2 = worker.get("return_target", home)
+	if str(worker.get("state", "")) == WORKER_FETCHING:
+		destination = home
+	if (worker["position"] as Vector2).distance_to(destination) < 3.0:
 		worker["movement_path"] = []
 		worker["movement_index"] = 0
 		return true
 	if worker.get("movement_path", []).is_empty():
-		if not set_worker_route(worker, home):
-			# If the precise shop entry is blocked, find a reachable place
-			# immediately outside it, instead of freezing on the job site.
+		if not set_worker_route(worker, destination):
+			# Resolve the closest reachable shop-side cell ONCE and retain it.
 			var home_cell: Vector2i = get_worker_cell(home)
 			var start_cell: Vector2i = get_worker_cell(worker["position"])
 			var blocked: Dictionary = build_navigation_blocked_cells(start_cell, home_cell)
-			var found: bool = false
-			for radius in range(1, 7):
-				if found:
-					break
+			var best: Vector2i = Vector2i(-1, -1)
+			var best_distance: float = INF
+			for radius in range(0, 9):
 				for dy in range(-radius, radius + 1):
-					if found:
-						break
 					for dx in range(-radius, radius + 1):
+						if maxi(absi(dx), absi(dy)) != radius:
+							continue
 						var candidate: Vector2i = home_cell + Vector2i(dx, dy)
 						if not property_manager.is_valid_cell(candidate.x, candidate.y) or blocked.has(candidate):
 							continue
-						if not find_navigation_path(start_cell, candidate).is_empty():
-							found = set_worker_route(worker, get_cell_center_local(candidate))
-							if found:
-								break
-			if not found:
+						if candidate != start_cell and find_navigation_path(start_cell, candidate).is_empty():
+							continue
+						var candidate_pos: Vector2 = get_cell_center_local(candidate)
+						var distance: float = candidate_pos.distance_to(home)
+						if distance < best_distance:
+							best_distance = distance
+							best = candidate
+			if best.x >= 0:
+				break
+			if best.x < 0:
 				return false
-	var reached: bool = follow_worker_route(worker, delta)
-	if reached:
+			destination = get_cell_center_local(best)
+			worker["return_target"] = destination
+			if (worker["position"] as Vector2).distance_to(destination) < 3.0:
+				return true
+			if not set_worker_route(worker, destination):
+				return false
+	if follow_worker_route(worker, delta):
 		worker["movement_path"] = []
 		worker["movement_index"] = 0
-	return reached
+		return true
+	return false
 
 
 func process_idle_wander(worker: Dictionary, delta: float) -> void:
