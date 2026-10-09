@@ -1,5 +1,4 @@
-
-# Disc Golf Empire - Update 32: tee queues, lie-order play, flight-line aiming and visible altitude.
+# Disc Golf Empire - Update 33: Update 32 golfer behavior with clean airborne disc visuals.
 # Based on the working Update 30 arrival/check-in/navigation system.
 extends Node2D
 
@@ -798,7 +797,6 @@ func _draw() -> void:
 				var ground_world: Vector2 = property_manager.property_local_to_world(ground_local)
 				# Ground shadow anchors the disc to its real horizontal position.
 				draw_circle(ground_world + Vector2(2, 2), 4.0, Color(0, 0, 0, FLIGHT_SHADOW_ALPHA))
-				draw_line(ground_world, disc_world, Color(1.0, 0.91, 0.48, 0.17), 1.0)
 				draw_circle(disc_world, 7.0, Color(1.0, 0.87, 0.32, 0.18))
 			else:
 				draw_circle(disc_world + Vector2(1, 2), 4.5, Color(0, 0, 0, 0.24))
