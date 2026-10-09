@@ -31,6 +31,7 @@ var speed_index := 1
 var refresh_clock := 0.0
 
 func setup(ui_ref, course_ref, economy_ref, job_ref, golfer_ref, radio_ref, camera_ref) -> void:
+	layer = 20
 	ui = ui_ref
 	course_manager = course_ref
 	economy_manager = economy_ref
@@ -38,11 +39,13 @@ func setup(ui_ref, course_ref, economy_ref, job_ref, golfer_ref, radio_ref, came
 	golfer_manager = golfer_ref
 	radio_manager = radio_ref
 	camera_controller = camera_ref
-	if ui.top_panel != null:
-		ui.top_panel.hide()
-	if ui.empire_sidebar != null:
-		ui.empire_sidebar.hide()
 	build_hud()
+	# Hide the original controls only after the replacement HUD exists.
+	if dock != null and top_bar != null:
+		if ui.top_panel != null:
+			ui.top_panel.hide()
+		if ui.empire_sidebar != null:
+			ui.empire_sidebar.hide()
 	get_viewport().size_changed.connect(_layout_hud)
 	set_process(true)
 
