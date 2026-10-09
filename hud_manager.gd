@@ -1,4 +1,4 @@
-# Disc Golf Empire — Update 22: Readable Tycoon Command Dock
+# Disc Golf Empire — Update 20: Classic Tycoon Floating Dock
 # Mobile-first left dock; reuses the established CourseUI callbacks.
 extends CanvasLayer
 
@@ -69,8 +69,8 @@ func button_style(active: bool = false) -> StyleBoxFlat:
 func make_button(label_text: String, callback: Callable, width: float = 94.0) -> Button:
 	var button := Button.new()
 	button.text = label_text
-	button.custom_minimum_size = Vector2(width, 66)
-	button.add_theme_font_size_override("font_size", 22)
+	button.custom_minimum_size = Vector2(width, 48)
+	button.add_theme_font_size_override("font_size", 16)
 	button.add_theme_color_override("font_color", WHITE)
 	button.add_theme_color_override("font_hover_color", GOLD)
 	button.add_theme_stylebox_override("normal", button_style())
@@ -90,11 +90,11 @@ func build_hud() -> void:
 	status_label = Label.new()
 	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	status_label.clip_text = true
-	status_label.add_theme_font_size_override("font_size", 21)
+	status_label.add_theme_font_size_override("font_size", 15)
 	status_label.add_theme_color_override("font_color", GOLD)
 	top_row.add_child(status_label)
-	speed_button = make_button("1×", _cycle_speed, 72)
-	speed_button.custom_minimum_size.y = 48
+	speed_button = make_button("1×", _cycle_speed, 52)
+	speed_button.custom_minimum_size.y = 38
 	top_row.add_child(speed_button)
 
 	dock = PanelContainer.new()
@@ -108,23 +108,22 @@ func build_hud() -> void:
 	var buttons := VBoxContainer.new()
 	buttons.add_theme_constant_override("separation", 6)
 	dock_scroll.add_child(buttons)
-	# Icons only; full names are displayed in the expanded drawer.
 	var tabs := [
-		["Build", "⚒"], ["Land", "♣"], ["Staff", "♟"],
-		["Golfers", "●"], ["Course", "⚑"], ["Radio", "♫"]
+		["Build", "BUILD"], ["Land", "LAND"], ["Staff", "STAFF"],
+		["Golfers", "GOLF"], ["Course", "HOLES"], ["Radio", "RADIO"]
 	]
 	for entry in tabs:
 		var tab_name: String = entry[0]
-		var button := make_button(entry[1], _toggle_tab.bind(tab_name), 76)
+		var button := make_button(entry[1], _toggle_tab.bind(tab_name), 64)
 		button.tooltip_text = tab_name
-		button.add_theme_font_size_override("font_size", 29)
+		button.add_theme_font_size_override("font_size", 12)
 		buttons.add_child(button)
 		dock_buttons[tab_name] = button
-	var inspect_button := make_button("◎", _inspect, 76)
-	inspect_button.add_theme_font_size_override("font_size", 29)
+	var inspect_button := make_button("VIEW", _inspect, 64)
+	inspect_button.add_theme_font_size_override("font_size", 12)
 	buttons.add_child(inspect_button)
-	var camera_button := make_button("⌖", _reset_camera, 76)
-	camera_button.add_theme_font_size_override("font_size", 29)
+	var camera_button := make_button("CAM", _reset_camera, 64)
+	camera_button.add_theme_font_size_override("font_size", 12)
 	buttons.add_child(camera_button)
 
 	drawer = PanelContainer.new()
@@ -139,10 +138,10 @@ func build_hud() -> void:
 	drawer_title = Label.new()
 	drawer_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	drawer_title.add_theme_color_override("font_color", GOLD)
-	drawer_title.add_theme_font_size_override("font_size", 29)
+	drawer_title.add_theme_font_size_override("font_size", 20)
 	heading.add_child(drawer_title)
 	var close_button := make_button("×", close_drawer, 42)
-	close_button.custom_minimum_size.y = 54
+	close_button.custom_minimum_size.y = 38
 	heading.add_child(close_button)
 	var rule := HSeparator.new()
 	column.add_child(rule)
@@ -164,12 +163,12 @@ func _layout_hud() -> void:
 	var screen := get_viewport().get_visible_rect().size
 	var compact := screen.x < 760.0
 	var margin := 10.0
-	var top_height := 70.0
+	var top_height := 54.0
 	top_bar.position = Vector2(margin, 8.0)
 	top_bar.size = Vector2(maxf(180.0, screen.x - margin * 2.0), top_height)
-	var dock_width := clampf(screen.x * 0.18, 90.0, 164.0)
-	var dock_height := maxf(190.0, screen.y - 112.0)
-	dock.position = Vector2(12.0, 92.0)
+	var dock_width := 88.0 if compact else 104.0
+	var dock_height := minf(550.0, maxf(170.0, screen.y - 94.0))
+	dock.position = Vector2(12.0, maxf(76.0, (screen.y - dock_height) * 0.5))
 	dock.size = Vector2(dock_width, dock_height)
 	fit_drawer()
 
@@ -199,7 +198,7 @@ func _toggle_tab(tab: String) -> void:
 			var message := Label.new()
 			message.text = "Tap a golfer in the world to open their profile."
 			message.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-			message.add_theme_font_size_override("font_size", 23)
+			message.add_theme_font_size_override("font_size", 17)
 			drawer_body.add_child(message)
 		"Course":
 			add_action("Previous Hole", "_on_previous_hole_pressed")
@@ -219,14 +218,14 @@ func fit_drawer() -> void:
 		return
 	var screen := get_viewport().get_visible_rect().size
 	var compact := screen.x < 760.0
-	var dock_width := clampf(screen.x * 0.18, 90.0, 164.0)
+	var dock_width := 88.0 if compact else 104.0
 	var gap := 12.0
 	var drawer_left := 12.0 + dock_width + gap
 	var available_width := maxf(150.0, screen.x - drawer_left - 14.0)
-	var drawer_width := minf(560.0 if compact else 680.0, available_width)
-	var usable_height := maxf(160.0, screen.y - 118.0)
-	var drawer_height := usable_height
-	var top := 92.0
+	var drawer_width := minf(350.0 if compact else 410.0, available_width)
+	var usable_height := maxf(160.0, screen.y - 126.0)
+	var drawer_height := minf(490.0, usable_height)
+	var top := maxf(82.0, (screen.y - drawer_height) * 0.5)
 	drawer.position = Vector2(drawer_left, top)
 	drawer.size = Vector2(drawer_width, drawer_height)
 
@@ -238,12 +237,12 @@ func _update_active_buttons() -> void:
 		button.add_theme_color_override("font_color", GOLD if active else WHITE)
 
 func add_action(title: String, method_name: String) -> void:
-	var action := make_button(title, _invoke_ui.bind(method_name), 120)
+	var action := make_button(title, _invoke_ui.bind(method_name), 290)
 	action.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	drawer_body.add_child(action)
 
 func add_radio_action(title: String, method_name: String) -> void:
-	var action := make_button(title, _invoke_radio.bind(method_name), 120)
+	var action := make_button(title, _invoke_radio.bind(method_name), 290)
 	action.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	drawer_body.add_child(action)
 
