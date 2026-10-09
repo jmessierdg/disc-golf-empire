@@ -1,11 +1,13 @@
-# Disc Golf Empire — Update 19: Park Management HUD
-# New mobile-first overlay. Reuses CourseUI's existing gameplay callbacks.
+# Disc Golf Empire — Update 20: Classic Tycoon Floating Dock
+# Mobile-first left dock; reuses the established CourseUI callbacks.
 extends CanvasLayer
 
-const INK := Color(0.055, 0.09, 0.075, 0.96)
-const EDGE := Color(0.27, 0.43, 0.31, 1.0)
-const GOLD := Color(0.98, 0.79, 0.38, 1.0)
-const WHITE := Color(0.96, 0.97, 0.92, 1.0)
+const INK := Color(0.055, 0.095, 0.075, 0.97)
+const EDGE := Color(0.26, 0.40, 0.29, 1.0)
+const GOLD := Color(0.96, 0.76, 0.36, 1.0)
+const WHITE := Color(0.94, 0.97, 0.93, 1.0)
+const MUTED := Color(0.67, 0.76, 0.68, 1.0)
+const ACTIVE := Color(0.17, 0.33, 0.23, 1.0)
 
 var ui
 var course_manager
@@ -15,12 +17,14 @@ var golfer_manager
 var radio_manager
 var camera_controller
 var top_bar: PanelContainer
-var bottom_bar: PanelContainer
+var dock: PanelContainer
+var dock_scroll: ScrollContainer
 var drawer: PanelContainer
 var drawer_title: Label
 var drawer_body: VBoxContainer
 var status_label: Label
 var speed_button: Button
+var dock_buttons: Dictionary = {}
 var selected_tab := ""
 var sim_speeds := [0.0, 1.0, 2.0, 4.0]
 var speed_index := 1
@@ -39,96 +43,134 @@ func setup(ui_ref, course_ref, economy_ref, job_ref, golfer_ref, radio_ref, came
 	if ui.empire_sidebar != null:
 		ui.empire_sidebar.hide()
 	build_hud()
+	get_viewport().size_changed.connect(_layout_hud)
 	set_process(true)
 
 func panel_style() -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = INK
 	style.border_color = EDGE
-	style.set_border_width_all(2)
-	style.set_corner_radius_all(13)
-	style.set_content_margin_all(8)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(14)
+	style.set_content_margin_all(7)
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.36)
+	style.shadow_size = 6
+	return style
+
+func button_style(active: bool = false) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = ACTIVE if active else Color(0.085, 0.145, 0.11, 0.97)
+	style.border_color = GOLD if active else Color(0.22, 0.35, 0.26, 0.8)
+	style.set_border_width_all(2 if active else 1)
+	style.set_corner_radius_all(9)
+	style.set_content_margin_all(5)
 	return style
 
 func make_button(label_text: String, callback: Callable, width: float = 94.0) -> Button:
 	var button := Button.new()
 	button.text = label_text
-	button.custom_minimum_size = Vector2(width, 56)
-	button.add_theme_font_size_override("font_size", 18)
+	button.custom_minimum_size = Vector2(width, 48)
+	button.add_theme_font_size_override("font_size", 16)
 	button.add_theme_color_override("font_color", WHITE)
+	button.add_theme_color_override("font_hover_color", GOLD)
+	button.add_theme_stylebox_override("normal", button_style())
+	button.add_theme_stylebox_override("hover", button_style(true))
+	button.add_theme_stylebox_override("pressed", button_style(true))
 	button.pressed.connect(callback)
 	return button
 
 func build_hud() -> void:
 	top_bar = PanelContainer.new()
 	top_bar.name = "ParkStatusBar"
-	top_bar.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	top_bar.offset_left = 10
-	top_bar.offset_right = -10
-	top_bar.offset_top = 8
-	top_bar.offset_bottom = 72
 	top_bar.add_theme_stylebox_override("panel", panel_style())
 	add_child(top_bar)
 	var top_row := HBoxContainer.new()
-	top_row.add_theme_constant_override("separation", 12)
+	top_row.add_theme_constant_override("separation", 8)
 	top_bar.add_child(top_row)
 	status_label = Label.new()
 	status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	status_label.add_theme_font_size_override("font_size", 19)
+	status_label.clip_text = true
+	status_label.add_theme_font_size_override("font_size", 15)
 	status_label.add_theme_color_override("font_color", GOLD)
 	top_row.add_child(status_label)
-	speed_button = make_button("1×", _cycle_speed, 65)
+	speed_button = make_button("1×", _cycle_speed, 52)
+	speed_button.custom_minimum_size.y = 38
 	top_row.add_child(speed_button)
 
-	bottom_bar = PanelContainer.new()
-	bottom_bar.name = "ParkToolbar"
-	bottom_bar.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-	bottom_bar.offset_left = 10
-	bottom_bar.offset_right = -10
-	bottom_bar.offset_top = -82
-	bottom_bar.offset_bottom = -7
-	bottom_bar.add_theme_stylebox_override("panel", panel_style())
-	add_child(bottom_bar)
-	var scroll := ScrollContainer.new()
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	bottom_bar.add_child(scroll)
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 5)
-	scroll.add_child(row)
-	for tab in ["Build", "Land", "Staff", "Golfers", "Course", "Radio"]:
-		row.add_child(make_button(tab, _toggle_tab.bind(tab), 102))
-	row.add_child(make_button("Inspect", _inspect, 105))
-	row.add_child(make_button("Camera", _reset_camera, 105))
+	dock = PanelContainer.new()
+	dock.name = "FloatingCommandDock"
+	dock.add_theme_stylebox_override("panel", panel_style())
+	add_child(dock)
+	dock_scroll = ScrollContainer.new()
+	dock_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	dock_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	dock.add_child(dock_scroll)
+	var buttons := VBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 6)
+	dock_scroll.add_child(buttons)
+	var tabs := [
+		["Build", "BUILD"], ["Land", "LAND"], ["Staff", "STAFF"],
+		["Golfers", "GOLF"], ["Course", "HOLES"], ["Radio", "RADIO"]
+	]
+	for entry in tabs:
+		var tab_name: String = entry[0]
+		var button := make_button(entry[1], _toggle_tab.bind(tab_name), 64)
+		button.tooltip_text = tab_name
+		button.add_theme_font_size_override("font_size", 12)
+		buttons.add_child(button)
+		dock_buttons[tab_name] = button
+	var inspect_button := make_button("VIEW", _inspect, 64)
+	inspect_button.add_theme_font_size_override("font_size", 12)
+	buttons.add_child(inspect_button)
+	var camera_button := make_button("CAM", _reset_camera, 64)
+	camera_button.add_theme_font_size_override("font_size", 12)
+	buttons.add_child(camera_button)
 
 	drawer = PanelContainer.new()
-	drawer.name = "ParkActionDrawer"
-	drawer.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	drawer.offset_left = 10
-	drawer.offset_right = 365
-	drawer.offset_top = -470
-	drawer.offset_bottom = -91
+	drawer.name = "FloatingActionDrawer"
 	drawer.add_theme_stylebox_override("panel", panel_style())
 	add_child(drawer)
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 7)
+	column.add_theme_constant_override("separation", 8)
 	drawer.add_child(column)
 	var heading := HBoxContainer.new()
 	column.add_child(heading)
 	drawer_title = Label.new()
 	drawer_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	drawer_title.add_theme_color_override("font_color", GOLD)
-	drawer_title.add_theme_font_size_override("font_size", 22)
+	drawer_title.add_theme_font_size_override("font_size", 20)
 	heading.add_child(drawer_title)
-	heading.add_child(make_button("×", close_drawer, 48))
+	var close_button := make_button("×", close_drawer, 42)
+	close_button.custom_minimum_size.y = 38
+	heading.add_child(close_button)
+	var rule := HSeparator.new()
+	column.add_child(rule)
 	var scroller := ScrollContainer.new()
 	scroller.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroller.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	column.add_child(scroller)
 	drawer_body = VBoxContainer.new()
-	drawer_body.add_theme_constant_override("separation", 5)
+	drawer_body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	drawer_body.add_theme_constant_override("separation", 6)
 	scroller.add_child(drawer_body)
 	drawer.hide()
+	_layout_hud()
 	refresh_status()
+
+func _layout_hud() -> void:
+	if dock == null:
+		return
+	var screen := get_viewport().get_visible_rect().size
+	var compact := screen.x < 760.0
+	var margin := 10.0
+	var top_height := 54.0
+	top_bar.position = Vector2(margin, 8.0)
+	top_bar.size = Vector2(maxf(180.0, screen.x - margin * 2.0), top_height)
+	var dock_width := 88.0 if compact else 104.0
+	var dock_height := minf(550.0, maxf(170.0, screen.y - 94.0))
+	dock.position = Vector2(12.0, maxf(76.0, (screen.y - dock_height) * 0.5))
+	dock.size = Vector2(dock_width, dock_height)
+	fit_drawer()
 
 func _toggle_tab(tab: String) -> void:
 	if selected_tab == tab and drawer.visible:
@@ -169,11 +211,30 @@ func _toggle_tab(tab: String) -> void:
 			add_radio_action("Full Player", "toggle_expanded")
 	drawer.show()
 	fit_drawer()
+	_update_active_buttons()
 
 func fit_drawer() -> void:
+	if drawer == null:
+		return
 	var screen := get_viewport().get_visible_rect().size
-	drawer.offset_right = minf(390.0, screen.x - 12.0)
-	drawer.offset_top = -minf(470.0, screen.y - 105.0)
+	var compact := screen.x < 760.0
+	var dock_width := 88.0 if compact else 104.0
+	var gap := 12.0
+	var drawer_left := 12.0 + dock_width + gap
+	var available_width := maxf(150.0, screen.x - drawer_left - 14.0)
+	var drawer_width := minf(350.0 if compact else 410.0, available_width)
+	var usable_height := maxf(160.0, screen.y - 126.0)
+	var drawer_height := minf(490.0, usable_height)
+	var top := maxf(82.0, (screen.y - drawer_height) * 0.5)
+	drawer.position = Vector2(drawer_left, top)
+	drawer.size = Vector2(drawer_width, drawer_height)
+
+func _update_active_buttons() -> void:
+	for tab_name in dock_buttons:
+		var button: Button = dock_buttons[tab_name]
+		var active: bool = tab_name == selected_tab and drawer.visible
+		button.add_theme_stylebox_override("normal", button_style(active))
+		button.add_theme_color_override("font_color", GOLD if active else WHITE)
 
 func add_action(title: String, method_name: String) -> void:
 	var action := make_button(title, _invoke_ui.bind(method_name), 290)
@@ -204,6 +265,7 @@ func _reset_camera() -> void:
 func close_drawer() -> void:
 	selected_tab = ""
 	drawer.hide()
+	_update_active_buttons()
 
 func _cycle_speed() -> void:
 	speed_index = (speed_index + 1) % sim_speeds.size()
