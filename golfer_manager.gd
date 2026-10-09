@@ -317,33 +317,14 @@ func clamp_to_property(point: Vector2) -> Vector2:
 	return Vector2(clampf(point.x, inset, size.x - inset), clampf(point.y, inset, size.y - inset))
 
 func route_on_property(start: Vector2, finish: Vector2) -> Array:
-	# The worker A* understands water, trees, facilities and completed walkways.
-	# Avoid straight-line routes through obstacles or beyond the property.
-	var safe_start: Vector2 = clamp_to_property(start)
+	# Temporary forced-play routing: walk straight to the real objective.
+	# Do not use worker A*: it was sending golfers on long detours.
+	# Both points are PROPERTY-LOCAL, never world coordinates.
 	var safe_finish: Vector2 = clamp_to_property(finish)
-	if navigation_manager == null:
-		return []
-	var start_cell: Vector2i = property_manager.world_to_cell(safe_start)
-	var target_cell: Vector2i = property_manager.world_to_cell(safe_finish)
-	var blocked: Dictionary = navigation_manager.build_navigation_blocked_cells(start_cell, target_cell)
-	if blocked.has(start_cell):
-		start_cell = navigation_manager.find_nearest_walkable_cell(start_cell, blocked)
-	if blocked.has(target_cell):
-		target_cell = navigation_manager.find_nearest_walkable_cell(target_cell, blocked)
-	if start_cell.x < 0 or target_cell.x < 0:
-		return []
-	var cells: Array = navigation_manager.find_navigation_path(start_cell, target_cell)
-	if cells.is_empty():
-		if start_cell == target_cell:
-			return [property_manager.cell_to_world_center(target_cell)]
-		return []
-	var route: Array = []
-	for cell_value in cells:
-		route.append(property_manager.cell_to_world_center(cell_value))
-	# End at a navigable cell center if the requested destination is obstructed.
-	if not blocked.has(property_manager.world_to_cell(safe_finish)):
-		route.append(safe_finish)
-	return route
+	if start.distance_to(safe_finish) <= 1.0:
+		return [safe_finish]
+	return [safe_finish]
+
 
 func set_destination(visitor: Dictionary, destination: Vector2) -> void:
 	var safe_destination: Vector2 = clamp_to_property(destination)
