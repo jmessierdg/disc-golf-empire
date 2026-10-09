@@ -160,6 +160,17 @@ func _process(delta: float) -> void:
 				visitor["stage"] = "walking_to_car"
 				set_destination(visitor, visitor["parking_slot"])
 			continue
+		if str(visitor["stage"]) == "navigation_blocked":
+			# Retry from the current position instead of wandering off-property.
+			var holes: Array = visitor["holes"]
+			var cursor: int = int(visitor["hole_cursor"])
+			if cursor < holes.size():
+				visitor["stage"] = "tee"
+				set_destination(visitor, hole_local(int(holes[cursor]), "tee"))
+			else:
+				visitor["stage"] = "walking_to_car"
+				set_destination(visitor, visitor["parking_slot"])
+			continue
 		if str(visitor["stage"]) == "throwing":
 			perform_throw(visitor)
 			continue
@@ -185,7 +196,7 @@ func route_on_property(start: Vector2, finish: Vector2) -> Array:
 	var safe_start: Vector2 = clamp_to_property(start)
 	var safe_finish: Vector2 = clamp_to_property(finish)
 	if navigation_manager == null:
-		return [safe_finish]
+		return []
 	var start_cell: Vector2i = property_manager.world_to_cell(safe_start)
 	var target_cell: Vector2i = property_manager.world_to_cell(safe_finish)
 	var blocked: Dictionary = navigation_manager.build_navigation_blocked_cells(start_cell, target_cell)
@@ -216,6 +227,7 @@ func set_destination(visitor: Dictionary, destination: Vector2) -> void:
 		visitor["stage"] = "navigation_blocked"
 		visitor["route"] = []
 		visitor["route_index"] = 0
+		visitor["wait"] = 3.0
 		return
 	visitor["route"] = route
 	visitor["route_index"] = 0
