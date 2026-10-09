@@ -1,4 +1,4 @@
-# Disc Golf Empire - Update 18: persistent visitor foundation.
+# Disc Golf Empire - Update 28: coordinated twosomes and complete rounds.
 # No licensed brands, no simulated disc flight yet.
 extends Node2D
 
@@ -8,6 +8,9 @@ signal visitor_departed(person_id: int)
 const MAX_VISITORS := 4
 const GROUP_SIZE := 2
 const PARTNER_WAIT_SECONDS := 1.5
+const TEE_PREPARE_SECONDS := 2.2
+const BETWEEN_SHOTS_SECONDS := 1.0
+const GROUP_WAIT_RADIUS := 55.0
 const FEEDBACK_SECONDS := 3.0
 const WALK_SPEED := 19.0
 const CAR_SPEED := 95.0
@@ -34,6 +37,8 @@ var next_membership_number: int = 10001
 var spawn_timer: float = 2.0
 var next_group_id: int = 1
 var last_feedback: String = ""
+# One active throw per twosome; tracks whose turn it is on the current hole.
+var group_turns: Dictionary = {}
 # All gameplay destinations use PROPERTY-LOCAL coordinates.
 var course_locations: Dictionary = {}
 const DEBUG_DESTINATIONS := false
@@ -108,7 +113,40 @@ func group_ready_for_tee(visitor: Dictionary) -> bool:
 		return false
 	if int(partner["hole_cursor"]) != int(visitor["hole_cursor"]):
 		return false
-	return str(partner["stage"]) in ["waiting_at_tee", "throwing", "walking_to_lie", "walking_to_basket", "waiting_at_basket"]
+	# Both must actually reach the tee before either is allowed to throw.
+	return str(partner["stage"]) == "waiting_at_tee" or int(partner.get("strokes", 0)) > 0
+
+
+func get_group_turn(visitor: Dictionary) -> int:
+	var group_id: int = int(visitor["group_id"])
+	if not group_turns.has(group_id):
+		var partner: Dictionary = get_partner(visitor)
+		if partner.is_empty():
+			return int(visitor["id"])
+		group_turns[group_id] = mini(int(visitor["id"]), int(partner["id"]))
+	return int(group_turns[group_id])
+
+
+func may_throw(visitor: Dictionary) -> bool:
+	var partner: Dictionary = get_partner(visitor)
+	if partner.is_empty():
+		return false
+	if int(partner["hole_cursor"]) != int(visitor["hole_cursor"]):
+		return false
+	# On a new hole, both players must be on the tee before tee-off.
+	if int(visitor["strokes"]) == 0 and int(partner["strokes"]) == 0:
+		if not bool(visitor.get("tee_ready", false)) or not bool(partner.get("tee_ready", false)):
+			return false
+	# One golfer throws, then the other gets the next opportunity.
+	if str(partner["stage"]) in ["waiting_at_basket", "walking_to_basket"]:
+		return true
+	return get_group_turn(visitor) == int(visitor["id"])
+
+
+func finish_throw_turn(visitor: Dictionary) -> void:
+	var partner: Dictionary = get_partner(visitor)
+	if not partner.is_empty():
+		group_turns[int(visitor["group_id"])] = int(partner["id"])
 
 
 func group_ready_for_next_hole(visitor: Dictionary) -> bool:
@@ -123,7 +161,10 @@ func move_group_to_next_hole(visitor: Dictionary) -> void:
 	if partner.is_empty():
 		return
 	var cursor: int = int(visitor["hole_cursor"])
+	group_turns.erase(int(visitor["group_id"]))
 	for member in [visitor, partner]:
+		member["tee_ready"] = false
+		member["strokes"] = 0
 		member["hole_cursor"] = cursor + 1
 		if cursor + 1 < member["holes"].size():
 			member["stage"] = "walking_to_tee"
@@ -253,7 +294,8 @@ func spawn_visitor() -> void:
 			"wait": float(index) * 2.5, "walked": 0.0, "off_path": 0.0,
 			"route_distance": 0.0, "strokes": 0, "round_scores": {},
 			"disc_position": start, "last_throw": "", "throw_wait": 0.0,
-			"round_recorded": false, "destination": slot, "destination_kind": "parking"
+			"round_recorded": false, "destination": slot, "destination_kind": "parking",
+			"tee_ready": false, "shot_pause": 0.0
 		}
 		pair.append(visitor)
 	pair[0]["partner_id"] = int(pair[1]["id"])
@@ -293,15 +335,22 @@ func _process(delta: float) -> void:
 					advance_stage(visitor)
 			"waiting_partner":
 				var partner: Dictionary = get_partner(visitor)
-				if not partner.is_empty() and str(partner["stage"]) not in ["driving_in", "parking"]:
-					visitor["stage"] = "walking_to_tee"
-					set_destination(visitor, hole_local(int(visitor["holes"][0]), "tee"))
+				# Nobody starts walking until both vehicles are parked and both
+				# golfers have exited. The second person triggers the pair.
+				if not partner.is_empty() and str(partner["stage"]) == "waiting_partner":
+					for member in [visitor, partner]:
+						member["stage"] = "walking_to_tee"
+						set_destination(member, hole_local(int(member["holes"][0]), "tee"))
 			"waiting_at_tee":
-				if group_ready_for_tee(visitor):
-					visitor["strokes"] = 0
-					visitor["disc_position"] = hole_local(int(visitor["holes"][int(visitor["hole_cursor"])]), "tee")
-					visitor["stage"] = "throwing"
-					visitor["wait"] = PARTNER_WAIT_SECONDS
+				var partner: Dictionary = get_partner(visitor)
+				if not partner.is_empty() and str(partner["stage"]) == "waiting_at_tee":
+					# Both arrive first. Set both ready together so iteration
+					# order cannot let one player tee off prematurely.
+					for member in [visitor, partner]:
+						member["tee_ready"] = true
+						member["disc_position"] = hole_local(int(member["holes"][int(member["hole_cursor"])]), "tee")
+						member["stage"] = "throwing"
+						member["wait"] = TEE_PREPARE_SECONDS
 			"waiting_at_basket":
 				if group_ready_for_next_hole(visitor):
 					move_group_to_next_hole(visitor)
@@ -324,11 +373,20 @@ func _process(delta: float) -> void:
 					visitor["stage"] = "walking_to_tee"
 					set_destination(visitor, hole_local(int(visitor["holes"][int(visitor["hole_cursor"])]), "tee"))
 			"throwing":
-				perform_throw(visitor)
+				if may_throw(visitor):
+					perform_throw(visitor)
+					finish_throw_turn(visitor)
 			"parking":
 				advance_stage(visitor)
 			"walking_to_tee", "walking_to_lie", "walking_to_basket", "walking_to_car":
-				if advance_visitor(visitor, delta):
+				# Keep partners loosely together between holes without ever
+				# redirecting either golfer away from the true tee coordinate.
+				var can_walk: bool = true
+				if stage == "walking_to_tee":
+					var partner: Dictionary = get_partner(visitor)
+					if not partner.is_empty() and str(partner["stage"]) == "walking_to_tee":
+						can_walk = visitor["position"].distance_to(partner["position"]) <= GROUP_WAIT_RADIUS
+				if can_walk and advance_visitor(visitor, delta):
 					advance_stage(visitor)
 	render_timer += delta
 	if render_timer >= 1.0 / 30.0:
@@ -553,7 +611,7 @@ func advance_stage(visitor: Dictionary) -> void:
 			visitor["stage"] = "waiting_at_tee"
 		"walking_to_lie":
 			visitor["stage"] = "throwing"
-			visitor["wait"] = 0.6
+			visitor["wait"] = BETWEEN_SHOTS_SECONDS
 		"walking_to_basket":
 			finish_hole(visitor)
 		"walking_to_car":
@@ -566,6 +624,8 @@ func advance_stage(visitor: Dictionary) -> void:
 			if not bool(visitor.get("round_recorded", false)):
 				record_round(visitor)
 			visitors.erase(visitor)
+			if get_partner(visitor).is_empty():
+				group_turns.erase(int(visitor["group_id"]))
 			visitor_departed.emit(int(visitor["id"]))
 			save_people()
 
