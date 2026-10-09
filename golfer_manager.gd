@@ -5,7 +5,10 @@ extends Node2D
 signal visitor_arrived(person_id: int)
 signal visitor_departed(person_id: int)
 
-const MAX_VISITORS := 3
+const MAX_VISITORS := 4
+const GROUP_SIZE := 2
+const PARTNER_WAIT_SECONDS := 1.5
+const FEEDBACK_SECONDS := 3.0
 const WALK_SPEED := 19.0
 const CAR_SPEED := 95.0
 const PARK_SECONDS := 2.0
@@ -29,6 +32,8 @@ var visitors: Array = []
 var next_person_id: int = 1
 var next_membership_number: int = 10001
 var spawn_timer: float = 2.0
+var next_group_id: int = 1
+var last_feedback: String = ""
 var render_timer: float = 0.0
 var rng := RandomNumberGenerator.new()
 var profile_layer: CanvasLayer
@@ -64,11 +69,89 @@ func get_parking_local() -> Vector2:
 		return property_manager.world_to_property_local(points[points.size() - 1])
 	return property_manager.get_property_local_center()
 
-func get_parking_slot(visitor_id: int) -> Vector2:
-	# Keep parked vehicles separate in the starter lot.
+func get_parking_slot(slot_index: int) -> Vector2:
+	# Four distinct marked positions inside the existing starter parking footprint.
 	var center: Vector2 = get_parking_local()
-	var slot: int = (visitor_id - 1) % MAX_VISITORS
-	return center + Vector2((float(slot) - 1.0) * 24.0, 0.0)
+	var facility: Dictionary = property_manager.get_starter_facility("starter_parking")
+	var size: Vector2 = facility.get("size", Vector2(140.0, 120.0))
+	var column: int = slot_index % 2
+	var row: int = int(slot_index / 2)
+	return center + Vector2(
+		(-0.24 if column == 0 else 0.24) * size.x,
+		(-0.23 if row == 0 else 0.23) * size.y
+	)
+
+
+func occupied_parking_slots() -> Dictionary:
+	var used: Dictionary = {}
+	for visitor_value in visitors:
+		var visitor: Dictionary = visitor_value
+		used[int(visitor.get("slot_index", -1))] = true
+	return used
+
+
+func get_partner(visitor: Dictionary) -> Dictionary:
+	var partner_id: int = int(visitor.get("partner_id", -1))
+	for value in visitors:
+		var other: Dictionary = value
+		if int(other["id"]) == partner_id:
+			return other
+	return {}
+
+
+func group_ready_for_tee(visitor: Dictionary) -> bool:
+	var partner: Dictionary = get_partner(visitor)
+	if partner.is_empty():
+		return false
+	if int(partner["hole_cursor"]) != int(visitor["hole_cursor"]):
+		return false
+	return str(partner["stage"]) in ["waiting_at_tee", "throwing", "walking_to_lie", "walking_to_basket", "waiting_at_basket"]
+
+
+func group_ready_for_next_hole(visitor: Dictionary) -> bool:
+	var partner: Dictionary = get_partner(visitor)
+	if partner.is_empty():
+		return false
+	return str(partner["stage"]) == "waiting_at_basket" and int(partner["hole_cursor"]) == int(visitor["hole_cursor"])
+
+
+func move_group_to_next_hole(visitor: Dictionary) -> void:
+	var partner: Dictionary = get_partner(visitor)
+	if partner.is_empty():
+		return
+	var cursor: int = int(visitor["hole_cursor"])
+	for member in [visitor, partner]:
+		member["hole_cursor"] = cursor + 1
+		if cursor + 1 < member["holes"].size():
+			member["stage"] = "walking_to_tee"
+			set_destination(member, hole_local(int(member["holes"][cursor + 1]), "tee"))
+		else:
+			member["stage"] = "feedback"
+			member["wait"] = FEEDBACK_SECONDS
+			record_round(member)
+
+
+func record_round(visitor: Dictionary) -> void:
+	if bool(visitor.get("round_recorded", false)):
+		return
+	visitor["round_recorded"] = true
+	var person: Dictionary = people[int(visitor["id"])]
+	person["visits"] = int(person["visits"]) + 1
+	var scores: Dictionary = visitor["round_scores"]
+	var total_strokes: int = 0
+	var total_par: int = 0
+	for result_value in scores.values():
+		var result: Dictionary = result_value
+		total_strokes += int(result["strokes"])
+		total_par += int(result["par"])
+	var feedback: String = "Enjoyed playing %d available holes with a partner." % scores.size()
+	if float(visitor["off_path"]) > float(visitor["walked"]) * 0.55:
+		feedback = "Fun round with a partner, but the walking routes need improvement."
+	person["feedback"].append(feedback)
+	person["history"].append({"holes": scores.size(), "scores": scores.duplicate(true), "strokes": total_strokes, "par": total_par, "feedback": feedback})
+	last_feedback = "%s: %s" % [str(person["name"]), feedback]
+	save_people()
+
 
 func get_driveway_route(to_parking: bool, parking_slot: Vector2) -> Array:
 	var route: Array = []
@@ -121,18 +204,44 @@ func make_person() -> Dictionary:
 	return person
 
 func spawn_visitor() -> void:
+	# Only admit a complete pair when two actual parking spaces are free.
 	var holes: Array = completed_holes()
-	if holes.is_empty() or visitors.size() >= MAX_VISITORS:
+	if holes.is_empty() or visitors.size() + GROUP_SIZE > MAX_VISITORS:
 		return
-	var person: Dictionary = make_person()
-	var start: Vector2 = get_entrance_local()
-	var visitor: Dictionary = {"id": int(person["id"]), "position": start, "state": "arriving", "holes": holes, "hole_cursor": 0, "stage": "driving_in", "route": [], "route_index": 0, "wait": 0.0, "walked": 0.0, "off_path": 0.0, "route_distance": 0.0, "strokes": 0, "round_scores": {}, "disc_position": start, "last_throw": "", "throw_wait": 0.0}
-	visitors.append(visitor)
-	visitor["parking_slot"] = get_parking_slot(int(person["id"]))
-	visitor["car_position"] = start
-	visitor["route"] = get_driveway_route(true, visitor["parking_slot"])
-	visitor["route_index"] = 0
-	visitor_arrived.emit(int(person["id"]))
+	var used: Dictionary = occupied_parking_slots()
+	var available: Array = []
+	for slot_index in range(MAX_VISITORS):
+		if not used.has(slot_index):
+			available.append(slot_index)
+	if available.size() < GROUP_SIZE:
+		return
+	var group_id: int = next_group_id
+	next_group_id += 1
+	var pair: Array = []
+	for index in range(GROUP_SIZE):
+		var person: Dictionary = make_person()
+		var start: Vector2 = get_entrance_local()
+		var slot_index: int = int(available[index])
+		var slot: Vector2 = get_parking_slot(slot_index)
+		var visitor: Dictionary = {
+			"id": int(person["id"]), "position": start,
+			"state": "arriving", "holes": holes.duplicate(),
+			"hole_cursor": 0, "stage": "driving_in",
+			"group_id": group_id, "partner_id": -1, "slot_index": slot_index,
+			"parking_slot": slot, "car_position": start,
+			"route": get_driveway_route(true, slot), "route_index": 0,
+			"wait": float(index) * 2.5, "walked": 0.0, "off_path": 0.0,
+			"route_distance": 0.0, "strokes": 0, "round_scores": {},
+			"disc_position": start, "last_throw": "", "throw_wait": 0.0,
+			"round_recorded": false
+		}
+		pair.append(visitor)
+	pair[0]["partner_id"] = int(pair[1]["id"])
+	pair[1]["partner_id"] = int(pair[0]["id"])
+	for visitor in pair:
+		visitors.append(visitor)
+		visitor_arrived.emit(int(visitor["id"]))
+
 
 func hole_local(index: int, which: String) -> Vector2:
 	return property_manager.world_to_property_local(course_manager.get_hole(index)[which])
@@ -144,46 +253,63 @@ func _process(delta: float) -> void:
 	if spawn_timer <= 0.0:
 		spawn_timer = SPAWN_INTERVAL
 		spawn_visitor()
-	for i in range(visitors.size() - 1, -1, -1):
-		var visitor: Dictionary = visitors[i]
+	# Process a snapshot because visitors can depart during this frame.
+	for value in visitors.duplicate():
+		var visitor: Dictionary = value
+		if not visitors.has(visitor):
+			continue
 		if float(visitor["wait"]) > 0.0:
 			visitor["wait"] = maxf(0.0, float(visitor["wait"]) - delta)
 			continue
-		if str(visitor["stage"]) == "navigation_blocked":
-			visitor["wait"] = 4.0
-			# Retry without advancing to a nonexistent waypoint.
-			var cursor: int = int(visitor["hole_cursor"])
-			if cursor < visitor["holes"].size():
-				visitor["stage"] = "tee"
-				set_destination(visitor, hole_local(int(visitor["holes"][cursor]), "tee"))
-			else:
+		var stage: String = str(visitor["stage"])
+		match stage:
+			"driving_in", "driving_out":
+				if advance_vehicle(visitor, delta):
+					advance_stage(visitor)
+			"waiting_partner":
+				var partner: Dictionary = get_partner(visitor)
+				if not partner.is_empty() and str(partner["stage"]) not in ["driving_in", "parking"]:
+					visitor["stage"] = "walking_to_tee"
+					set_destination(visitor, hole_local(int(visitor["holes"][0]), "tee"))
+			"waiting_at_tee":
+				if group_ready_for_tee(visitor):
+					visitor["strokes"] = 0
+					visitor["disc_position"] = hole_local(int(visitor["holes"][int(visitor["hole_cursor"])]), "tee")
+					visitor["stage"] = "throwing"
+					visitor["wait"] = PARTNER_WAIT_SECONDS
+			"waiting_at_basket":
+				if group_ready_for_next_hole(visitor):
+					move_group_to_next_hole(visitor)
+			"feedback":
 				visitor["stage"] = "walking_to_car"
 				set_destination(visitor, visitor["parking_slot"])
-			continue
-		if str(visitor["stage"]) == "navigation_blocked":
-			# Retry from the current position instead of wandering off-property.
-			var holes: Array = visitor["holes"]
-			var cursor: int = int(visitor["hole_cursor"])
-			if cursor < holes.size():
-				visitor["stage"] = "tee"
-				set_destination(visitor, hole_local(int(holes[cursor]), "tee"))
-			else:
-				visitor["stage"] = "walking_to_car"
-				set_destination(visitor, visitor["parking_slot"])
-			continue
-		if str(visitor["stage"]) == "throwing":
-			perform_throw(visitor)
-			continue
-		if str(visitor["stage"]) in ["driving_in", "driving_out"]:
-			if advance_vehicle(visitor, delta):
+			"navigation_blocked":
+				# Don't wander: retry the actual current objective.
+				visitor["wait"] = 4.0
+				if int(visitor["hole_cursor"]) >= visitor["holes"].size():
+					visitor["stage"] = "walking_to_car"
+					set_destination(visitor, visitor["parking_slot"])
+				elif str(visitor.get("blocked_goal", "")) == "basket":
+					visitor["stage"] = "walking_to_basket"
+					set_destination(visitor, hole_local(int(visitor["holes"][int(visitor["hole_cursor"])]), "basket"))
+				elif str(visitor.get("blocked_goal", "")) == "lie":
+					visitor["stage"] = "walking_to_lie"
+					set_destination(visitor, visitor["disc_position"])
+				else:
+					visitor["stage"] = "walking_to_tee"
+					set_destination(visitor, hole_local(int(visitor["holes"][int(visitor["hole_cursor"])]), "tee"))
+			"throwing":
+				perform_throw(visitor)
+			"parking":
 				advance_stage(visitor)
-			continue
-		if advance_visitor(visitor, delta):
-			advance_stage(visitor)
+			"walking_to_tee", "walking_to_lie", "walking_to_basket", "walking_to_car":
+				if advance_visitor(visitor, delta):
+					advance_stage(visitor)
 	render_timer += delta
 	if render_timer >= 1.0 / 30.0:
 		render_timer = 0.0
 		queue_redraw()
+
 
 func clamp_to_property(point: Vector2) -> Vector2:
 	var size: Vector2 = property_manager.get_property_size_pixels()
@@ -224,6 +350,7 @@ func set_destination(visitor: Dictionary, destination: Vector2) -> void:
 	var route: Array = route_on_property(visitor["position"], safe_destination)
 	if route.is_empty():
 		# No traversable route: remain in place instead of walking into nowhere.
+		visitor["blocked_goal"] = ("basket" if str(visitor["stage"]) == "walking_to_basket" else ("lie" if str(visitor["stage"]) == "walking_to_lie" else "tee"))
 		visitor["stage"] = "navigation_blocked"
 		visitor["route"] = []
 		visitor["route_index"] = 0
@@ -391,64 +518,49 @@ func perform_throw(visitor: Dictionary) -> void:
 func finish_hole(visitor: Dictionary) -> void:
 	var holes: Array = visitor["holes"]
 	var cursor: int = int(visitor["hole_cursor"])
+	if cursor >= holes.size():
+		return
 	var hole_index: int = int(holes[cursor])
 	var person: Dictionary = people[int(visitor["id"])]
 	var strokes: int = int(visitor["strokes"])
 	var par: int = course_manager.calculate_par(course_manager.calculate_hole_distance(hole_index, property_manager.CELL_SIZE))
 	visitor["round_scores"][str(hole_index + 1)] = {"strokes": strokes, "par": par}
 	person["holes_visited"] = int(person["holes_visited"]) + 1
-	visitor["hole_cursor"] = cursor + 1
-	if cursor + 1 < holes.size():
-		visitor["stage"] = "tee"
-		set_destination(visitor, hole_local(int(holes[cursor + 1]), "tee"))
-	else:
-		visitor["stage"] = "walking_to_car"
-		set_destination(visitor, visitor["parking_slot"])
+	visitor["stage"] = "waiting_at_basket"
+
 
 func advance_stage(visitor: Dictionary) -> void:
 	var holes: Array = visitor["holes"]
 	var cursor: int = int(visitor["hole_cursor"])
 	var stage: String = str(visitor["stage"])
-	if stage == "driving_in":
-		visitor["stage"] = "tee"
-		visitor["wait"] = PARK_SECONDS
-		visitor["position"] = visitor["parking_slot"]
-		visitor["car_position"] = visitor["parking_slot"]
-		set_destination(visitor, hole_local(int(holes[0]), "tee"))
-	elif stage == "walking_to_car":
-		visitor["stage"] = "driving_out"
-		visitor["position"] = visitor["parking_slot"]
-		visitor["car_position"] = visitor["parking_slot"]
-		visitor["route"] = get_driveway_route(false, visitor["parking_slot"])
-		visitor["route_index"] = 0
-	elif stage == "tee":
-		visitor["strokes"] = 0
-		visitor["disc_position"] = hole_local(int(holes[cursor]), "tee")
-		visitor["stage"] = "throwing"
-		visitor["wait"] = 1.5
-	elif stage == "walking_to_lie":
-		visitor["stage"] = "throwing"
-		visitor["wait"] = 0.6
-	elif stage == "walking_to_basket":
-		finish_hole(visitor)
-	elif stage == "driving_out":
-		var person: Dictionary = people[int(visitor["id"])]
-		person["visits"] = int(person["visits"]) + 1
-		var feedback: String = "Walking routes were easy to follow."
-		if float(visitor["off_path"]) > float(visitor["walked"]) * 0.55:
-			feedback = "The course needs better walking paths between holes."
-		person["feedback"].append(feedback)
-		var scores: Dictionary = visitor["round_scores"]
-		var total_strokes: int = 0
-		var total_par: int = 0
-		for result_value in scores.values():
-			var result: Dictionary = result_value
-			total_strokes += int(result["strokes"])
-			total_par += int(result["par"])
-		person["history"].append({"holes": scores.size(), "scores": scores.duplicate(true), "strokes": total_strokes, "par": total_par, "feedback": feedback})
-		visitors.erase(visitor)
-		visitor_departed.emit(int(person["id"]))
-		save_people()
+	match stage:
+		"driving_in":
+			visitor["stage"] = "parking"
+			visitor["wait"] = PARK_SECONDS
+			visitor["position"] = visitor["parking_slot"]
+			visitor["car_position"] = visitor["parking_slot"]
+		"parking":
+			visitor["stage"] = "waiting_partner"
+		"walking_to_tee":
+			visitor["stage"] = "waiting_at_tee"
+		"walking_to_lie":
+			visitor["stage"] = "throwing"
+			visitor["wait"] = 0.6
+		"walking_to_basket":
+			finish_hole(visitor)
+		"walking_to_car":
+			visitor["stage"] = "driving_out"
+			visitor["position"] = visitor["parking_slot"]
+			visitor["car_position"] = visitor["parking_slot"]
+			visitor["route"] = get_driveway_route(false, visitor["parking_slot"])
+			visitor["route_index"] = 0
+		"driving_out":
+			if not bool(visitor.get("round_recorded", false)):
+				record_round(visitor)
+			visitors.erase(visitor)
+			visitor_departed.emit(int(visitor["id"]))
+			save_people()
+
 
 func _draw() -> void:
 	if property_manager == null:
